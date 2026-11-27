@@ -537,3 +537,597 @@ def update_player(user_id, **values):
         )
 
     return cursor.rowcount > 0
+# ==================================================
+# INVENTORY FUNCTIONS
+# ==================================================
+
+def add_item(user_id, item_name, quantity=1, item_type="item"):
+
+    quantity = int(quantity)
+
+    if quantity <= 0:
+        return False
+
+    with connect() as db:
+
+        item = db.execute("""
+            SELECT id
+            FROM inventory
+            WHERE user_id = ?
+              AND item_name = ?
+              AND item_type = ?
+        """, (
+            user_id,
+            item_name,
+            item_type
+        )).fetchone()
+
+        if item:
+
+            db.execute("""
+                UPDATE inventory
+                SET quantity = quantity + ?
+                WHERE id = ?
+            """, (
+                quantity,
+                item["id"]
+            ))
+
+        else:
+
+            db.execute("""
+                INSERT INTO inventory (
+                    user_id,
+                    item_name,
+                    item_type,
+                    quantity
+                )
+                VALUES (?, ?, ?, ?)
+            """, (
+                user_id,
+                item_name,
+                item_type,
+                quantity
+            ))
+
+    return True
+
+
+def remove_item(user_id, item_name, quantity=1):
+
+    quantity = int(quantity)
+
+    if quantity <= 0:
+        return False
+
+    with connect() as db:
+
+        item = db.execute("""
+            SELECT id, quantity
+            FROM inventory
+            WHERE user_id = ?
+              AND item_name = ?
+        """, (
+            user_id,
+            item_name
+        )).fetchone()
+
+        if not item or item["quantity"] < quantity:
+            return False
+
+        remaining = item["quantity"] - quantity
+
+        if remaining == 0:
+
+            db.execute("""
+                DELETE FROM inventory
+                WHERE id = ?
+            """, (item["id"],))
+
+        else:
+
+            db.execute("""
+                UPDATE inventory
+                SET quantity = ?
+                WHERE id = ?
+            """, (
+                remaining,
+                item["id"]
+            ))
+
+    return True
+
+
+def get_inventory(user_id):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM inventory
+            WHERE user_id = ?
+            ORDER BY item_name
+        """, (user_id,)).fetchall()
+
+
+# ==================================================
+# SKILL FUNCTIONS
+# ==================================================
+
+def get_skills(user_id):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM player_skills
+            WHERE user_id = ?
+            ORDER BY skill_name
+        """, (user_id,)).fetchall()
+
+
+def add_skill(
+    user_id,
+    skill_name,
+    damage=10,
+    skill_type="attack",
+    mp_cost=0,
+    cooldown=0
+):
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            INSERT OR IGNORE INTO player_skills (
+                user_id,
+                skill_name,
+                skill_type,
+                damage,
+                mp_cost,
+                cooldown
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            skill_name,
+            skill_type,
+            damage,
+            mp_cost,
+            cooldown
+        ))
+
+    return cursor.rowcount == 1
+
+
+def has_skill(user_id, skill_name):
+
+    with connect() as db:
+
+        row = db.execute("""
+            SELECT 1
+            FROM player_skills
+            WHERE user_id = ?
+              AND skill_name = ?
+        """, (
+            user_id,
+            skill_name
+        )).fetchone()
+
+    return row is not None
+
+
+# ==================================================
+# SHADOW FUNCTIONS
+# ==================================================
+
+def get_shadows(user_id):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM shadows
+            WHERE user_id = ?
+            ORDER BY level DESC
+        """, (user_id,)).fetchall()
+
+
+def add_shadow(
+    user_id,
+    shadow_name,
+    shadow_rank="E",
+    level=1,
+    loyalty=50
+):
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            INSERT INTO shadows (
+                user_id,
+                shadow_name,
+                shadow_rank,
+                level,
+                loyalty
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            shadow_name,
+            shadow_rank,
+            level,
+            loyalty
+        ))
+
+    return cursor.lastrowid
+
+
+# ==================================================
+# TITLE FUNCTIONS
+# ==================================================
+
+def get_titles(user_id):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM titles
+            WHERE user_id = ?
+            ORDER BY id DESC
+        """, (user_id,)).fetchall()
+
+
+def add_title(user_id, title_name):
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            INSERT OR IGNORE INTO titles (
+                user_id,
+                title_name
+            )
+            VALUES (?, ?)
+        """, (
+            user_id,
+            title_name
+        ))
+
+    return cursor.lastrowid
+
+
+# ==================================================
+# MONSTER COLLECTION FUNCTIONS
+# ==================================================
+
+def get_monsters(user_id):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM monsters
+            WHERE user_id = ?
+            ORDER BY monster_name
+        """, (user_id,)).fetchall()
+
+
+def add_monster(user_id, monster_name, quantity=1):
+
+    quantity = int(quantity)
+
+    if quantity <= 0:
+        return False
+
+    with connect() as db:
+
+        monster = db.execute("""
+            SELECT id
+            FROM monsters
+            WHERE user_id = ?
+              AND monster_name = ?
+        """, (
+            user_id,
+            monster_name
+        )).fetchone()
+
+        if monster:
+
+            db.execute("""
+                UPDATE monsters
+                SET quantity = quantity + ?
+                WHERE id = ?
+            """, (
+                quantity,
+                monster["id"]
+            ))
+
+        else:
+
+            db.execute("""
+                INSERT INTO monsters (
+                    user_id,
+                    monster_name,
+                    quantity
+                )
+                VALUES (?, ?, ?)
+            """, (
+                user_id,
+                monster_name,
+                quantity
+            ))
+
+    return True
+
+
+# ==================================================
+# BATTLE HISTORY
+# ==================================================
+
+def add_battle_log(
+    attacker_id,
+    defender_id,
+    damage,
+    result=""
+):
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            INSERT INTO battle_logs (
+                attacker_id,
+                defender_id,
+                damage,
+                result
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            attacker_id,
+            defender_id,
+            damage,
+            result
+        ))
+
+    return cursor.lastrowid
+
+
+def get_battle_history(user_id, limit=20):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM battle_logs
+            WHERE attacker_id = ?
+               OR defender_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (
+            user_id,
+            user_id,
+            limit
+        )).fetchall()
+
+
+# ==================================================
+# WORLD BOSS
+# ==================================================
+
+def set_world_boss(boss_name, hp):
+
+    hp = max(0, int(hp))
+
+    with connect() as db:
+
+        db.execute("""
+            INSERT INTO world_boss (
+                id,
+                boss_name,
+                hp,
+                max_hp,
+                active
+            )
+            VALUES (1, ?, ?, ?, 1)
+
+            ON CONFLICT(id) DO UPDATE SET
+                boss_name = excluded.boss_name,
+                hp = excluded.hp,
+                max_hp = excluded.max_hp,
+                active = 1
+        """, (
+            boss_name,
+            hp,
+            hp
+        ))
+
+        db.execute("""
+            DELETE FROM world_boss_damage
+        """)
+
+    return True
+
+
+def get_world_boss():
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM world_boss
+            WHERE id = 1
+        """).fetchone()
+
+
+def damage_world_boss(user_id, damage):
+
+    damage = max(0, int(damage))
+
+    if damage <= 0:
+        return None
+
+    with connect() as db:
+
+        db.execute("BEGIN IMMEDIATE")
+
+        boss = db.execute("""
+            SELECT *
+            FROM world_boss
+            WHERE id = 1
+              AND active = 1
+        """).fetchone()
+
+        if not boss or boss["hp"] <= 0:
+            return None
+
+        actual_damage = min(damage, boss["hp"])
+
+        new_hp = boss["hp"] - actual_damage
+
+        db.execute("""
+            UPDATE world_boss
+            SET hp = ?
+            WHERE id = 1
+              AND active = 1
+        """, (new_hp,))
+
+        db.execute("""
+            INSERT INTO world_boss_damage (
+                user_id,
+                damage
+            )
+            VALUES (?, ?)
+
+            ON CONFLICT(user_id) DO UPDATE SET
+                damage = damage + excluded.damage
+        """, (
+            user_id,
+            actual_damage
+        ))
+
+        if new_hp <= 0:
+
+            db.execute("""
+                UPDATE world_boss
+                SET active = 0
+                WHERE id = 1
+            """)
+
+        return {
+            "damage": actual_damage,
+            "hp": new_hp,
+            "max_hp": boss["max_hp"],
+            "defeated": new_hp <= 0
+        }
+
+
+def get_world_boss_ranking(limit=10):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT
+                w.user_id,
+                w.damage,
+                p.name,
+                p.username
+
+            FROM world_boss_damage w
+
+            LEFT JOIN players p
+                ON p.user_id = w.user_id
+
+            ORDER BY w.damage DESC
+
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+
+# ==================================================
+# PLAYER RANKING
+# ==================================================
+
+def get_top_players(limit=10):
+
+    with connect() as db:
+
+        return db.execute("""
+            SELECT *
+            FROM players
+            ORDER BY power DESC, level DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+
+# ==================================================
+# PLAYER COUNT
+# ==================================================
+
+def get_player_count():
+
+    with connect() as db:
+
+        row = db.execute("""
+            SELECT COUNT(*) AS total
+            FROM players
+        """).fetchone()
+
+    return row["total"]
+
+
+# ==================================================
+# HEALTH AND RESOURCE FUNCTIONS
+# ==================================================
+
+def restore_player(user_id):
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            UPDATE players
+            SET
+                hp = max_hp,
+                mp = max_mp
+            WHERE user_id = ?
+        """, (user_id,))
+
+    return cursor.rowcount > 0
+
+
+def change_gold(user_id, amount):
+
+    amount = int(amount)
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            UPDATE players
+            SET gold = gold + ?
+            WHERE user_id = ?
+              AND gold + ? >= 0
+        """, (
+            amount,
+            user_id,
+            amount
+        ))
+
+    return cursor.rowcount > 0
+
+
+def change_crystals(user_id, amount):
+
+    amount = int(amount)
+
+    with connect() as db:
+
+        cursor = db.execute("""
+            UPDATE players
+            SET crystals = crystals + ?
+            WHERE user_id = ?
+              AND crystals + ? >= 0
+        """, (
+            amount,
+            user_id,
+            amount
+        ))
+
+    return cursor.rowcount > 0

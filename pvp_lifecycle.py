@@ -9,9 +9,9 @@ import database as db
 logger = logging.getLogger(__name__)
 
 
-# ==================================================
+# =====================================
 # SETTINGS
-# ==================================================
+# =====================================
 
 BASE_WIN_POINTS = 20
 BASE_LOSE_POINTS = 15
@@ -31,9 +31,9 @@ STREAK_BONUSES = {
 }
 
 
-# ==================================================
+# =====================================
 # DATABASE
-# ==================================================
+# =====================================
 
 def init_lifecycle_db():
 
@@ -45,15 +45,21 @@ def init_lifecycle_db():
                 points INTEGER DEFAULT 0,
                 wins INTEGER DEFAULT 0,
                 losses INTEGER DEFAULT 0,
-                win_streak INTEGER DEFAULT 0,
-                best_streak INTEGER DEFAULT 0
+                streak INTEGER DEFAULT 0,
+                best_streak INTEGER DEFAULT 0,
+                FOREIGN KEY(user_id)
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pvp_revives (
                 user_id INTEGER PRIMARY KEY,
-                revive_at REAL NOT NULL
+                revive_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id)
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -61,26 +67,23 @@ def init_lifecycle_db():
             CREATE TABLE IF NOT EXISTS rank_protection (
                 user_id INTEGER PRIMARY KEY,
                 protection_count INTEGER DEFAULT 0,
-                last_granted REAL DEFAULT 0
+                FOREIGN KEY(user_id)
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_processed_matches (
                 match_id INTEGER PRIMARY KEY,
-                processed_at REAL NOT NULL
+                processed_at INTEGER NOT NULL
             )
         """)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_revive_time
-            ON pvp_revives(revive_at)
-        """)
 
-
-# ==================================================
-# PLAYER RANKING
-# ==================================================
+# =====================================
+# RANKING
+# =====================================
 
 def get_ranking(user_id):
 
@@ -95,13 +98,22 @@ def get_ranking(user_id):
         if row:
             return row
 
+        player = conn.execute("""
+            SELECT user_id
+            FROM players
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+        if not player:
+            return None
+
         conn.execute("""
             INSERT OR IGNORE INTO pvp_rankings (
                 user_id,
                 points,
                 wins,
                 losses,
-                win_streak,
+                streak,
                 best_streak
             )
             VALUES (?, 0, 0, 0, 0, 0)
@@ -116,25 +128,20 @@ def get_ranking(user_id):
 
 def get_rank_name(points):
 
-    points = int(points)
+    ranks = [
+        (6000, "Monarch"),
+        (5000, "Master"),
+        (4000, "Diamond"),
+        (3000, "Platinum"),
+        (2000, "Gold"),
+        (1000, "Silver"),
+        (0, "Bronze")
+    ]
 
-    if points >= 6000:
-        return "👑 Monarch"
+    for required, name in ranks:
 
-    if points >= 5000:
-        return "Master"
-
-    if points >= 4000:
-        return "Diamond"
-
-    if points >= 3000:
-        return "Platinum"
-
-    if points >= 2000:
-        return "Gold"
-
-    if points >= 1000:
-        return "Silver"
+        if points >= required:
+            return name
 
     return "Bronze"
 
@@ -144,22 +151,22 @@ def get_rank_text(user_id):
     ranking = get_ranking(user_id)
 
     if not ranking:
-        return "اطلاعات رنک پیدا نشد."
+        return "بازیکن پیدا نشد."
+
+    points = ranking["points"]
 
     return (
-        "🏆 RANK PROFILE\n\n"
-        f"🎖 Rank: {get_rank_name(ranking['points'])}\n"
-        f"📊 Points: {ranking['points']}\n"
-        f"⚔️ Wins: {ranking['wins']}\n"
-        f"💀 Losses: {ranking['losses']}\n"
-        f"🔥 Win Streak: {ranking['win_streak']}\n"
-        f"🏅 Best Streak: {ranking['best_streak']}"
+        f"رتبه: {get_rank_name(points)}\n"
+        f"امتیاز: {points}\n"
+        f"برد: {ranking['wins']}\n"
+        f"باخت: {ranking['losses']}\n"
+        f"استریک: {ranking['streak']}"
     )
 
 
-# ==================================================
+# =====================================
 # RANK PROTECTION
-# ==================================================
+# =====================================
 
 def get_protection(user_id):
 
@@ -174,7 +181,7 @@ def get_protection(user_id):
     if not row:
         return 0
 
-    return max(0, int(row["protection_count"]))
+    return int(row["protection_count"] or 0)
 
 
 def grant_protection(user_id, amount=1):
@@ -186,30 +193,24 @@ def grant_protection(user_id, amount=1):
 
     with db.connect() as conn:
 
-        conn.execute("BEGIN IMMEDIATE")
-
         conn.execute("""
             INSERT OR IGNORE INTO rank_protection (
                 user_id,
-                protection_count,
-                last_granted
+                protection_count
             )
-            VALUES (?, 0, 0)
+            VALUES (?, 0)
         """, (user_id,))
 
         conn.execute("""
             UPDATE rank_protection
-            SET
-                protection_count = MIN(
-                    ?,
-                    protection_count + ?
-                ),
-                last_granted = ?
+            SET protection_count = MIN(
+                protection_count + ?,
+                ?
+            )
             WHERE user_id = ?
         """, (
-            MAX_PROTECTION,
             amount,
-            time.time(),
+            MAX_PROTECTION,
             user_id
         ))
 
@@ -219,7 +220,7 @@ def grant_protection(user_id, amount=1):
             WHERE user_id = ?
         """, (user_id,)).fetchone()
 
-    return int(row["protection_count"])
+    return int(row["protection_count"] or 0)
 
 
 def consume_protection(user_id):
@@ -237,39 +238,41 @@ def consume_protection(user_id):
         if not row or row["protection_count"] <= 0:
             return False
 
-        updated = conn.execute("""
+        conn.execute("""
             UPDATE rank_protection
             SET protection_count = protection_count - 1
             WHERE user_id = ?
-              AND protection_count > 0
+            AND protection_count > 0
         """, (user_id,))
 
-        return updated.rowcount == 1
+    return True
 
 
-# ==================================================
-# REVIVAL
-# ==================================================
+# =====================================
+# STREAK BONUS
+# =====================================
 
-def get_revive_remaining(user_id):
+def get_streak_bonus(streak):
 
-    with db.connect() as conn:
+    bonus = 0
 
-        row = conn.execute("""
-            SELECT revive_at
-            FROM pvp_revives
-            WHERE user_id = ?
-        """, (user_id,)).fetchone()
+    for required, points in STREAK_BONUSES.items():
 
-    if not row:
-        return 0
+        if streak >= required:
+            bonus = points
 
-    remaining = int(row["revive_at"] - time.time())
+    return bonus
 
-    return max(0, remaining)
 
+# =====================================
+# REVIVE
+# =====================================
 
 def schedule_revive(user_id):
+
+    revive_at = int(
+        time.time() + REVIVE_SECONDS
+    )
 
     with db.connect() as conn:
 
@@ -285,8 +288,29 @@ def schedule_revive(user_id):
                 revive_at = excluded.revive_at
         """, (
             user_id,
-            time.time() + REVIVE_SECONDS
+            revive_at
         ))
+
+    return revive_at
+
+
+def get_revive_remaining(user_id):
+
+    with db.connect() as conn:
+
+        row = conn.execute("""
+            SELECT revive_at
+            FROM pvp_revives
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+    if not row:
+        return 0
+
+    return max(
+        0,
+        int(row["revive_at"] - time.time())
+    )
 
 
 def revive_player(user_id):
@@ -295,16 +319,16 @@ def revive_player(user_id):
 
         conn.execute("BEGIN IMMEDIATE")
 
-        row = conn.execute("""
+        revive = conn.execute("""
             SELECT revive_at
             FROM pvp_revives
             WHERE user_id = ?
         """, (user_id,)).fetchone()
 
-        if not row:
+        if not revive:
             return False
 
-        if row["revive_at"] > time.time():
+        if revive["revive_at"] > time.time():
             return False
 
         player = conn.execute("""
@@ -318,8 +342,7 @@ def revive_player(user_id):
 
         conn.execute("""
             UPDATE players
-            SET
-                hp = max_hp,
+            SET hp = max_hp,
                 mp = max_mp,
                 is_dead = 0
             WHERE user_id = ?
@@ -333,25 +356,9 @@ def revive_player(user_id):
     return True
 
 
-# ==================================================
-# STREAK BONUS
-# ==================================================
-
-def calculate_streak_bonus(streak):
-
-    streak = int(streak)
-
-    bonus = 0
-
-    for required_streak, points in STREAK_BONUSES.items():
-
-        if streak >= required_streak:
-            bonus = points
-
-    return bonus
-# ==================================================
-# FINISH RANKED PVP
-# ==================================================
+# =====================================
+# FINISH RANKED MATCH
+# =====================================
 
 def finish_pvp(
     winner_id,
@@ -359,281 +366,310 @@ def finish_pvp(
     match_id=None
 ):
 
-    now = time.time()
+    if winner_id == loser_id:
+        return False
 
-    with db.connect() as conn:
+    if match_id is None:
+        return False
 
-        conn.execute("BEGIN IMMEDIATE")
+    try:
 
-        # ==========================================
-        # PREVENT DUPLICATE RESULTS
-        # ==========================================
+        with db.connect() as conn:
 
-        if match_id is not None:
+            conn.execute("BEGIN IMMEDIATE")
 
-            try:
+            # جلوگیری از ثبت دوباره نتیجه
+            existing = conn.execute("""
+                SELECT match_id
+                FROM lifecycle_processed_matches
+                WHERE match_id = ?
+            """, (match_id,)).fetchone()
 
-                conn.execute("""
-                    INSERT INTO lifecycle_processed_matches (
-                        match_id,
-                        processed_at
-                    )
-                    VALUES (?, ?)
-                """, (
-                    match_id,
-                    now
-                ))
-
-            except Exception:
-
-                logger.warning(
-                    "Match %s was already processed.",
-                    match_id
-                )
-
+            if existing:
                 return False
 
-        # ==========================================
-        # ENSURE RANKING ROWS
-        # ==========================================
-
-        for user_id in (winner_id, loser_id):
-
-            conn.execute("""
-                INSERT OR IGNORE INTO pvp_rankings (
-                    user_id,
-                    points,
-                    wins,
-                    losses,
-                    win_streak,
-                    best_streak
-                )
-                VALUES (?, 0, 0, 0, 0, 0)
-            """, (user_id,))
-
-        winner = conn.execute("""
-            SELECT *
-            FROM pvp_rankings
-            WHERE user_id = ?
-        """, (winner_id,)).fetchone()
-
-        loser = conn.execute("""
-            SELECT *
-            FROM pvp_rankings
-            WHERE user_id = ?
-        """, (loser_id,)).fetchone()
-
-        # ==========================================
-        # WINNER
-        # ==========================================
-
-        new_streak = winner["win_streak"] + 1
-
-        streak_bonus = calculate_streak_bonus(
-            new_streak
-        )
-
-        winner_points = (
-            BASE_WIN_POINTS + streak_bonus
-        )
-
-        conn.execute("""
-            UPDATE pvp_rankings
-            SET
-                points = points + ?,
-                wins = wins + 1,
-                win_streak = ?,
-                best_streak = MAX(best_streak, ?)
-            WHERE user_id = ?
-        """, (
-            winner_points,
-            new_streak,
-            new_streak,
-            winner_id
-        ))
-
-        # ==========================================
-        # LOSER PROTECTION
-        # ==========================================
-
-        conn.execute("""
-            INSERT OR IGNORE INTO rank_protection (
-                user_id,
-                protection_count,
-                last_granted
-            )
-            VALUES (?, 0, 0)
-        """, (loser_id,))
-
-        protection = conn.execute("""
-            SELECT protection_count
-            FROM rank_protection
-            WHERE user_id = ?
-        """, (loser_id,)).fetchone()
-
-        protected = False
-        loser_points = 0
-
-        if protection and protection["protection_count"] > 0:
-
-            updated = conn.execute("""
-                UPDATE rank_protection
-                SET protection_count = protection_count - 1
+            # بررسی بازیکنان
+            winner = conn.execute("""
+                SELECT user_id
+                FROM players
                 WHERE user_id = ?
-                  AND protection_count > 0
-            """, (loser_id,))
+            """, (winner_id,)).fetchone()
 
-            protected = updated.rowcount == 1
+            loser = conn.execute("""
+                SELECT user_id
+                FROM players
+                WHERE user_id = ?
+            """, (loser_id,)).fetchone()
 
-        if not protected:
+            if not winner or not loser:
+                return False
 
-            loser_points = BASE_LOSE_POINTS
+            # بررسی مسابقه Ranked
+            ranked_match = conn.execute("""
+                SELECT *
+                FROM ranked_matches
+                WHERE id = ?
+            """, (match_id,)).fetchone()
 
+            if not ranked_match:
+                return False
+
+            if ranked_match["status"] not in (
+                "active",
+                "finishing"
+            ):
+                return False
+
+            if winner_id not in (
+                ranked_match["player1"],
+                ranked_match["player2"]
+            ):
+                return False
+
+            if loser_id not in (
+                ranked_match["player1"],
+                ranked_match["player2"]
+            ):
+                return False
+
+            # ثبت نهایی مسابقه
+            conn.execute("""
+                INSERT INTO lifecycle_processed_matches (
+                    match_id,
+                    processed_at
+                )
+                VALUES (?, ?)
+            """, (
+                match_id,
+                int(time.time())
+            ))
+
+            # ساخت رتبه در صورت نبودن
+            for player_id in (
+                winner_id,
+                loser_id
+            ):
+
+                conn.execute("""
+                    INSERT OR IGNORE INTO pvp_rankings (
+                        user_id,
+                        points,
+                        wins,
+                        losses,
+                        streak,
+                        best_streak
+                    )
+                    VALUES (?, 0, 0, 0, 0, 0)
+                """, (player_id,))
+
+            winner_rank = conn.execute("""
+                SELECT *
+                FROM pvp_rankings
+                WHERE user_id = ?
+            """, (winner_id,)).fetchone()
+
+            loser_rank = conn.execute("""
+                SELECT *
+                FROM pvp_rankings
+                WHERE user_id = ?
+            """, (loser_id,)).fetchone()
+
+            # محاسبه استریک و پاداش
+            new_streak = winner_rank["streak"] + 1
+
+            bonus = get_streak_bonus(
+                new_streak
+            )
+
+            winner_points = (
+                BASE_WIN_POINTS + bonus
+            )
+
+            # محافظ رتبه
+            protection_row = conn.execute("""
+                SELECT protection_count
+                FROM rank_protection
+                WHERE user_id = ?
+            """, (loser_id,)).fetchone()
+
+            protected = bool(
+                protection_row
+                and protection_row["protection_count"] > 0
+            )
+
+            if protected:
+
+                conn.execute("""
+                    UPDATE rank_protection
+                    SET protection_count = protection_count - 1
+                    WHERE user_id = ?
+                    AND protection_count > 0
+                """, (loser_id,))
+
+                loser_points = 0
+
+            else:
+
+                loser_points = min(
+                    BASE_LOSE_POINTS,
+                    loser_rank["points"]
+                )
+
+            # به‌روزرسانی برنده
             conn.execute("""
                 UPDATE pvp_rankings
-                SET
-                    points = MAX(0, points - ?),
+                SET points = points + ?,
+                    wins = wins + 1,
+                    streak = ?,
+                    best_streak = MAX(
+                        best_streak,
+                        ?
+                    )
+                WHERE user_id = ?
+            """, (
+                winner_points,
+                new_streak,
+                new_streak,
+                winner_id
+            ))
+
+            # به‌روزرسانی بازنده
+            conn.execute("""
+                UPDATE pvp_rankings
+                SET points = MAX(
+                        0,
+                        points - ?
+                    ),
                     losses = losses + 1,
-                    win_streak = 0
+                    streak = 0
                 WHERE user_id = ?
             """, (
                 loser_points,
                 loser_id
             ))
 
-        else:
+            # آمار بازیکنان
+            conn.execute("""
+                UPDATE players
+                SET wins = wins + 1
+                WHERE user_id = ?
+            """, (winner_id,))
 
             conn.execute("""
-                UPDATE pvp_rankings
-                SET
-                    losses = losses + 1,
-                    win_streak = 0
+                UPDATE players
+                SET losses = losses + 1,
+                    deaths = deaths + 1,
+                    hp = 0,
+                    is_dead = 1
                 WHERE user_id = ?
             """, (loser_id,))
 
-        # ==========================================
-        # PLAYER STATISTICS
-        # ==========================================
-
-        conn.execute("""
-            UPDATE players
-            SET wins = wins + 1
-            WHERE user_id = ?
-        """, (winner_id,))
-
-        conn.execute("""
-            UPDATE players
-            SET
-                losses = losses + 1,
-                deaths = deaths + 1,
-                hp = 0,
-                is_dead = 1
-            WHERE user_id = ?
-        """, (loser_id,))
-
-        # ==========================================
-        # REVIVAL TIMER
-        # ==========================================
-
-        conn.execute("""
-            INSERT INTO pvp_revives (
-                user_id,
-                revive_at
+            # زمان احیا
+            revive_at = int(
+                time.time() + REVIVE_SECONDS
             )
-            VALUES (?, ?)
 
-            ON CONFLICT(user_id)
-            DO UPDATE SET
-                revive_at = excluded.revive_at
-        """, (
-            loser_id,
-            now + REVIVE_SECONDS
-        ))
+            conn.execute("""
+                INSERT INTO pvp_revives (
+                    user_id,
+                    revive_at
+                )
+                VALUES (?, ?)
 
-        # ==========================================
-        # RESULT
-        # ==========================================
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+                    revive_at = excluded.revive_at
+            """, (
+                loser_id,
+                revive_at
+            ))
 
-        winner_new = conn.execute("""
-            SELECT points
-            FROM pvp_rankings
-            WHERE user_id = ?
-        """, (winner_id,)).fetchone()
+            winner_total = conn.execute("""
+                SELECT points
+                FROM pvp_rankings
+                WHERE user_id = ?
+            """, (winner_id,)).fetchone()["points"]
 
-        loser_new = conn.execute("""
-            SELECT points
-            FROM pvp_rankings
-            WHERE user_id = ?
-        """, (loser_id,)).fetchone()
+            loser_total = conn.execute("""
+                SELECT points
+                FROM pvp_rankings
+                WHERE user_id = ?
+            """, (loser_id,)).fetchone()["points"]
 
-    return {
-        "winner_points": winner_points,
-        "loser_points": loser_points,
-        "streak_bonus": streak_bonus,
-        "protected": protected,
-        "winner_total": winner_new["points"],
-        "loser_total": loser_new["points"]
-    }
+            return {
+                "winner_points": winner_points,
+                "loser_points": loser_points,
+                "streak_bonus": bonus,
+                "protected": protected,
+                "winner_total": winner_total,
+                "loser_total": loser_total
+            }
 
+    except Exception:
 
-# ==================================================
-# AUTO REVIVAL JOB
-# ==================================================
+        logger.exception(
+            "Ranked result processing failed"
+        )
+
+        return False
+# =====================================
+# AUTOMATIC REVIVE
+# =====================================
 
 async def auto_revive_job(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    now = time.time()
+    now = int(time.time())
 
-    with db.connect() as conn:
+    try:
 
-        expired = conn.execute("""
-            SELECT user_id
-            FROM pvp_revives
-            WHERE revive_at <= ?
-        """, (now,)).fetchall()
+        with db.connect() as conn:
 
-    for row in expired:
+            expired = conn.execute("""
+                SELECT user_id
+                FROM pvp_revives
+                WHERE revive_at <= ?
+            """, (now,)).fetchall()
 
-        user_id = row["user_id"]
+        for row in expired:
 
-        try:
+            user_id = row["user_id"]
 
-            success = revive_player(user_id)
+            revived = revive_player(user_id)
 
-            if success:
+            if not revived:
+                continue
 
-                try:
+            try:
 
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            "✨ REVIVAL COMPLETE!\n\n"
-                            "❤️ HP restored.\n"
-                            "🔮 MP restored.\n\n"
-                            "تو دوباره می‌تونی وارد مبارزه بشی."
-                        )
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "✨ احیای شخصیت انجام شد!\n\n"
+                        "❤️ HP به حداکثر رسید.\n"
+                        "💙 MP به حداکثر رسید.\n\n"
+                        "اکنون می‌توانی دوباره وارد مبارزه شوی."
                     )
+                )
 
-                except Exception:
+            except Exception:
 
-                    logger.info(
-                        "Could not notify revived player %s",
-                        user_id
-                    )
+                logger.warning(
+                    "Could not notify revived player %s",
+                    user_id
+                )
 
-        except Exception:
+    except Exception:
 
-            logger.exception(
-                "Auto revival failed for user %s",
-                user_id
-            )
+        logger.exception(
+            "Automatic revive job failed"
+        )
 
 
-# ==================================================
+# =====================================
 # SETUP
-# ==================================================
+# =====================================
 
 def setup_lifecycle(application):
 
@@ -641,15 +677,19 @@ def setup_lifecycle(application):
 
     if application.job_queue:
 
-        application.job_queue.run_repeating(
-            auto_revive_job,
-            interval=10,
-            first=10,
-            name="pvp_auto_revive"
+        existing = application.job_queue.get_jobs_by_name(
+            "pvp_auto_revive"
         )
 
-    else:
+        if not existing:
 
-        logger.warning(
-            "JobQueue is unavailable. Auto revival is disabled."
-        )
+            application.job_queue.run_repeating(
+                auto_revive_job,
+                interval=10,
+                first=5,
+                name="pvp_auto_revive"
+            )
+
+    logger.info(
+        "PvP lifecycle loaded successfully"
+    )

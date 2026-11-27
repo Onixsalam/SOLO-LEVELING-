@@ -2,28 +2,18 @@ import os
 import time
 import logging
 
-from telegram import (
-Update,
-InlineKeyboardButton,
-InlineKeyboardMarkup
-)
-
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-CommandHandler,
-CallbackQueryHandler,
-ContextTypes
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
 )
 
 import database as db
 import pvp_lifecycle as lifecycle
 
-logger = logging.getLogger(name)
 
-=====================================
-
-SETTINGS
-
-=====================================
+logger = logging.getLogger(__name__)
 
 RANKED_CHAT_ID = os.getenv("RANKED_CHAT_ID")
 
@@ -33,1029 +23,725 @@ ACCEPT_TIMEOUT = 60
 MAX_POWER_DIFFERENCE = 500
 MAX_RANK_DIFFERENCE = 500
 
-=====================================
-
-RANKS
-
-=====================================
-
 RANKS = [
-(0, "Bronze"),
-(1000, "Silver"),
-(2000, "Gold"),
-(3000, "Platinum"),
-(4000, "Diamond"),
-(5000, "Master"),
-(6000, "Monarch")
+    ("Bronze", 0),
+    ("Silver", 1000),
+    ("Gold", 2000),
+    ("Platinum", 3000),
+    ("Diamond", 4000),
+    ("Master", 5000),
+    ("Monarch", 6000),
 ]
 
-def get_rank(points):
-
-result = "Bronze"
-
-for required, name in RANKS:
-
-    if points >= required:
-        result = name
-
-return result
-
-=====================================
-
-DATABASE
-
-=====================================
 
 def init_ranked_db():
+    with db.connect() as conn:
 
-with db.connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ranked_queue (
+                user_id INTEGER PRIMARY KEY,
+                power INTEGER DEFAULT 0,
+                points INTEGER DEFAULT 0,
+                joined_at REAL NOT NULL
+            )
+        """)
 
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS ranked_queue (
-        user_id INTEGER PRIMARY KEY,
-        power INTEGER NOT NULL,
-        points INTEGER NOT NULL,
-        joined_at REAL NOT NULL
-    )
-    """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ranked_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player1 INTEGER NOT NULL,
+                player2 INTEGER NOT NULL,
+                status TEXT DEFAULT 'pending',
+                player1_accepted INTEGER DEFAULT 0,
+                player2_accepted INTEGER DEFAULT 0,
+                created_at REAL NOT NULL,
+                battle_chat_id INTEGER,
+                battle_message_id INTEGER
+            )
+        """)
 
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS ranked_matches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        player1 INTEGER NOT NULL,
-        player2 INTEGER NOT NULL,
-        accepted1 INTEGER DEFAULT 0,
-        accepted2 INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'pending',
-        created_at REAL NOT NULL,
-        expires_at REAL NOT NULL,
-        battle_message_id INTEGER,
-        battle_chat_id INTEGER
-    )
-    """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ranked_matches_status
+            ON ranked_matches(status)
+        """)
 
-    conn.execute("""
-    CREATE INDEX IF NOT EXISTS idx_ranked_status
-    ON ranked_matches(status)
-    """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ranked_queue_joined
+            ON ranked_queue(joined_at)
+        """)
 
-    conn.execute("""
-    CREATE INDEX IF NOT EXISTS idx_ranked_players
-    ON ranked_matches(player1, player2, status)
-    """)
-
-=====================================
-
-PLAYER
-
-=====================================
 
 def get_player(user_id):
+    with db.connect() as conn:
+        return conn.execute(
+            "SELECT * FROM players WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
 
-with db.connect() as conn:
-
-    return conn.execute("""
-    SELECT *
-    FROM players
-    WHERE user_id = ?
-    """, (user_id,)).fetchone()
 
 def is_dead(user_id):
+    player = get_player(user_id)
 
-player = get_player(user_id)
+    if not player:
+        return True
 
-if not player:
-    return True
+    if player["is_dead"]:
+        return True
 
-if player["is_dead"]:
-    return True
+    remaining = lifecycle.get_revive_remaining(user_id)
 
-if lifecycle.get_revive_remaining(user_id) > 0:
-    return True
+    return remaining > 0
 
-return False
 
 def player_in_match(user_id):
+    with db.connect() as conn:
+        row = conn.execute("""
+            SELECT id
+            FROM ranked_matches
+            WHERE (player1 = ? OR player2 = ?)
+            AND status IN ('pending', 'starting', 'active')
+            LIMIT 1
+        """, (user_id, user_id)).fetchone()
 
-with db.connect() as conn:
+    return row is not None
 
-    row = conn.execute("""
-    SELECT id
-    FROM ranked_matches
-    WHERE status IN ('pending', 'starting', 'active')
-    AND (
-        player1 = ?
-        OR player2 = ?
-    )
-    LIMIT 1
-    """, (user_id, user_id)).fetchone()
 
-return row is not None
+def get_rank(points):
+    current = "Bronze"
 
-=====================================
+    for name, minimum in RANKS:
+        if points >= minimum:
+            current = name
 
-RANK PROFILE
+    return current
 
-=====================================
 
 def get_rank_profile(user_id):
+    ranking = lifecycle.get_ranking(user_id)
 
-return lifecycle.get_rank_profile(user_id)
-
-=====================================
-
-JOIN QUEUE
-
-=====================================
-
-def join_queue(user_id):
-
-player = get_player(user_id)
-
-if not player:
-    return False, "ابتدا با /start ثبت‌نام کن."
-
-if is_dead(user_id):
-    return False, "در وضعیت DEAD هستی و نمی‌تونی وارد Ranked بشی."
-
-ranking = get_rank_profile(user_id)
-
-if not ranking:
-    return False, "اطلاعات رنک بازیکن پیدا نشد."
-
-with db.connect() as conn:
-
-    conn.execute("BEGIN IMMEDIATE")
-
-    existing = conn.execute("""
-    SELECT user_id
-    FROM ranked_queue
-    WHERE user_id = ?
-    """, (user_id,)).fetchone()
-
-    if existing:
-        return False, "از قبل داخل صف جست‌وجو هستی."
-
-    active = conn.execute("""
-    SELECT id
-    FROM ranked_matches
-    WHERE status IN ('pending', 'starting', 'active')
-    AND (
-        player1 = ?
-        OR player2 = ?
-    )
-    LIMIT 1
-    """, (user_id, user_id)).fetchone()
-
-    if active:
-        return False, "تو یک مسابقه فعال داری."
-
-    conn.execute("""
-    INSERT INTO ranked_queue (
-        user_id,
-        power,
-        points,
-        joined_at
-    )
-    VALUES (?, ?, ?, ?)
-    """, (
-        user_id,
-        player["power"],
-        ranking["points"],
-        time.time()
-    ))
-
-return True, "وارد صف Ranked Match شدی."
-
-=====================================
-
-LEAVE QUEUE
-
-=====================================
-
-def leave_queue(user_id):
-
-with db.connect() as conn:
-
-    conn.execute("""
-    DELETE FROM ranked_queue
-    WHERE user_id = ?
-    """, (user_id,))
-
-=====================================
-
-FIND OPPONENT
-
-=====================================
-
-def find_opponent(user_id):
-
-with db.connect() as conn:
-
-    conn.execute("BEGIN IMMEDIATE")
-
-    current = conn.execute("""
-    SELECT *
-    FROM ranked_queue
-    WHERE user_id = ?
-    """, (user_id,)).fetchone()
-
-    if not current:
-        return None
-
-    # بررسی اینکه بازیکن قبلاً وارد مسابقه نشده باشد
-
-    active = conn.execute("""
-    SELECT id
-    FROM ranked_matches
-    WHERE status IN ('pending', 'starting', 'active')
-    AND (
-        player1 = ?
-        OR player2 = ?
-    )
-    LIMIT 1
-    """, (user_id, user_id)).fetchone()
-
-    if active:
-
-        conn.execute("""
-        DELETE FROM ranked_queue
-        WHERE user_id = ?
-        """, (user_id,))
-
-        return None
-
-    candidates = conn.execute("""
-    SELECT q.*
-    FROM ranked_queue q
-    JOIN players p ON p.user_id = q.user_id
-    WHERE q.user_id != ?
-    AND p.is_dead = 0
-    ORDER BY
-        ABS(q.power - ?) + ABS(q.points - ?) ASC
-    """, (
-        user_id,
-        current["power"],
-        current["points"]
-    )).fetchall()
-
-    for candidate in candidates:
-
-        power_difference = abs(
-            current["power"] - candidate["power"]
-        )
-
-        rank_difference = abs(
-            current["points"] - candidate["points"]
-        )
-
-        if power_difference > MAX_POWER_DIFFERENCE:
-            continue
-
-        if rank_difference > MAX_RANK_DIFFERENCE:
-            continue
-
-        # بررسی وضعیت احیای حریف
-
-        revive = conn.execute("""
-        SELECT revive_at
-        FROM pvp_revives
-        WHERE user_id = ?
-        """, (candidate["user_id"],)).fetchone()
-
-        if revive and revive["revive_at"] > int(time.time()):
-            continue
-
-        # بررسی مسابقه فعال حریف
-
-        candidate_active = conn.execute("""
-        SELECT id
-        FROM ranked_matches
-        WHERE status IN ('pending', 'starting', 'active')
-        AND (
-            player1 = ?
-            OR player2 = ?
-        )
-        LIMIT 1
-        """, (
-            candidate["user_id"],
-            candidate["user_id"]
-        )).fetchone()
-
-        if candidate_active:
-            continue
-
-        now = time.time()
-
-        cursor = conn.execute("""
-        INSERT INTO ranked_matches (
-            player1,
-            player2,
-            accepted1,
-            accepted2,
-            status,
-            created_at,
-            expires_at
-        )
-        VALUES (?, ?, 0, 0, 'pending', ?, ?)
-        """, (
-            user_id,
-            candidate["user_id"],
-            now,
-            now + ACCEPT_TIMEOUT
-        ))
-
-        conn.execute("""
-        DELETE FROM ranked_queue
-        WHERE user_id IN (?, ?)
-        """, (
-            user_id,
-            candidate["user_id"]
-        ))
-
+    if not ranking:
         return {
-            "match_id": cursor.lastrowid,
-            "player1": user_id,
-            "player2": candidate["user_id"]
+            "points": 0,
+            "rank": "Bronze",
+            "wins": 0,
+            "losses": 0,
+            "streak": 0,
         }
 
-return None
+    points = ranking["points"]
 
-=====================================
+    return {
+        "points": points,
+        "rank": get_rank(points),
+        "wins": ranking["wins"],
+        "losses": ranking["losses"],
+        "streak": ranking["win_streak"],
+    }
 
-SEARCH BUTTON
 
-=====================================
+async def join_queue(user_id):
+    player = get_player(user_id)
 
-async def ranked_search(
-update: Update,
-context: ContextTypes.DEFAULT_TYPE
-):
+    if not player:
+        return False, "اول با دستور /start وارد بازی شو."
 
-query = update.callback_query
-user_id = query.from_user.id
+    if is_dead(user_id):
+        return False, "شخصیتت در حال احیاست و فعلاً نمی‌تونی وارد رنک بشی."
 
-if query.message.chat.type != "private":
+    if player_in_match(user_id):
+        return False, "تو در حال حاضر داخل یک مسابقه هستی."
 
-    await query.answer(
-        "این بخش فقط در چت خصوصی است.",
-        show_alert=True
+    profile = get_rank_profile(user_id)
+
+    power = player["power"] if "power" in player.keys() else 0
+
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        existing = conn.execute(
+            "SELECT user_id FROM ranked_queue WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+
+        if existing:
+            return False, "تو همین الان داخل صف رنک هستی."
+
+        conn.execute("""
+            INSERT INTO ranked_queue
+            (user_id, power, points, joined_at)
+            VALUES (?, ?, ?, ?)
+        """, (
+            user_id,
+            power,
+            profile["points"],
+            time.time()
+        ))
+
+    return True, "وارد صف رنک شدی."
+
+
+async def leave_queue(user_id):
+    with db.connect() as conn:
+        conn.execute(
+            "DELETE FROM ranked_queue WHERE user_id = ?",
+            (user_id,)
+        )
+
+
+def find_opponent(user_id):
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        me = conn.execute("""
+            SELECT *
+            FROM ranked_queue
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+        if not me:
+            return None
+
+        candidates = conn.execute("""
+            SELECT *
+            FROM ranked_queue
+            WHERE user_id != ?
+            ORDER BY ABS(points - ?) ASC, joined_at ASC
+        """, (user_id, me["points"])).fetchall()
+
+        for enemy in candidates:
+
+            p1 = conn.execute(
+                "SELECT * FROM players WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+
+            p2 = conn.execute(
+                "SELECT * FROM players WHERE user_id = ?",
+                (enemy["user_id"],)
+            ).fetchone()
+
+            if not p1 or not p2:
+                continue
+
+            if p1["is_dead"] or p2["is_dead"]:
+                continue
+
+            if abs(me["power"] - enemy["power"]) > MAX_POWER_DIFFERENCE:
+                continue
+
+            if abs(me["points"] - enemy["points"]) > MAX_RANK_DIFFERENCE:
+                continue
+
+            revive1 = conn.execute("""
+                SELECT revive_at FROM pvp_revives
+                WHERE user_id = ?
+            """, (user_id,)).fetchone()
+
+            revive2 = conn.execute("""
+                SELECT revive_at FROM pvp_revives
+                WHERE user_id = ?
+            """, (enemy["user_id"],)).fetchone()
+
+            now = time.time()
+
+            if revive1 and revive1["revive_at"] > now:
+                continue
+
+            if revive2 and revive2["revive_at"] > now:
+                continue
+
+            active = conn.execute("""
+                SELECT id
+                FROM ranked_matches
+                WHERE (
+                    player1 IN (?, ?)
+                    OR player2 IN (?, ?)
+                )
+                AND status IN ('pending', 'starting', 'active')
+                LIMIT 1
+            """, (
+                user_id,
+                enemy["user_id"],
+                user_id,
+                enemy["user_id"]
+            )).fetchone()
+
+            if active:
+                continue
+
+            cursor = conn.execute("""
+                INSERT INTO ranked_matches (
+                    player1,
+                    player2,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, 'pending', ?)
+            """, (
+                user_id,
+                enemy["user_id"],
+                now
+            ))
+
+            match_id = cursor.lastrowid
+
+            conn.execute(
+                "DELETE FROM ranked_queue WHERE user_id IN (?, ?)",
+                (user_id, enemy["user_id"])
+            )
+
+            return match_id
+
+    return None
+
+
+async def ranked_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if update.effective_chat.type != "private":
+        await update.message.reply_text(
+            "برای جستجوی مسابقه رنک، از چت خصوصی بات استفاده کن."
+        )
+        return
+
+    if not RANKED_CHAT_ID:
+        await update.message.reply_text(
+            "سیستم رنک هنوز تنظیم نشده است."
+        )
+        return
+
+    if not context.job_queue:
+        await update.message.reply_text(
+            "سیستم جستجوی مسابقه در دسترس نیست."
+        )
+        return
+
+    success, message = await join_queue(user.id)
+
+    if not success:
+        await update.message.reply_text(message)
+        return
+
+    sent = await update.message.reply_text(
+        "🔎 در حال جستجوی حریف...\n\n"
+        "برای خروج از صف از دستور /rankcancel استفاده کن."
     )
 
-    return
-
-if not RANKED_CHAT_ID:
-
-    await query.answer(
-        "گروه Ranked Arena هنوز تنظیم نشده.",
-        show_alert=True
+    context.job_queue.run_repeating(
+        check_queue,
+        interval=SEARCH_INTERVAL,
+        first=SEARCH_INTERVAL,
+        data={
+            "user_id": user.id,
+            "chat_id": sent.chat_id,
+            "message_id": sent.message_id,
+        },
+        name=f"rank_search_{user.id}",
     )
 
-    return
 
-if not context.job_queue:
+async def check_queue(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
 
-    await query.answer(
-        "سیستم جست‌وجو در دسترس نیست.",
-        show_alert=True
-    )
+    user_id = data["user_id"]
 
-    return
+    match_id = find_opponent(user_id)
 
-success, result = join_queue(user_id)
+    if not match_id:
+        return
 
-if not success:
+    job = context.job
+    job.schedule_removal()
 
-    await query.answer(
-        result,
-        show_alert=True
-    )
+    with db.connect() as conn:
+        match = conn.execute("""
+            SELECT *
+            FROM ranked_matches
+            WHERE id = ?
+        """, (match_id,)).fetchone()
 
-    return
+    if not match:
+        return
 
-await query.answer()
+    p1 = match["player1"]
+    p2 = match["player2"]
 
-await query.edit_message_text(
-    "🔍 RANKED MATCH SEARCH\n\n"
-    "در حال پیدا کردن حریف مناسب...\n\n"
-    "⚔️ جست‌وجو بر اساس قدرت و امتیاز رنک انجام می‌شه.",
-    reply_markup=InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "❌ Cancel Search",
-                callback_data="ranked_cancel"
+                "قبول مسابقه",
+                callback_data=f"rank_accept_{match_id}"
+            ),
+            InlineKeyboardButton(
+                "رد مسابقه",
+                callback_data=f"rank_decline_{match_id}"
             )
         ]
     ])
-)
 
-# جلوگیری از ساخت Job تکراری
-
-remove_search_job(context, user_id)
-
-context.job_queue.run_repeating(
-    check_queue,
-    interval=SEARCH_INTERVAL,
-    first=1,
-    data={
-        "user_id": user_id,
-        "chat_id": query.message.chat_id
-    },
-    name=f"ranked_search_{user_id}"
-)
-
-=====================================
-
-CHECK QUEUE
-
-=====================================
-
-async def check_queue(context):
-
-data = context.job.data
-user_id = data["user_id"]
-
-with db.connect() as conn:
-
-    queued = conn.execute("""
-    SELECT user_id
-    FROM ranked_queue
-    WHERE user_id = ?
-    """, (user_id,)).fetchone()
-
-if not queued:
-
-    remove_search_job(context, user_id)
-    return
-
-match = find_opponent(user_id)
-
-if not match:
-    return
-
-remove_search_job(context, user_id)
-
-match_id = match["match_id"]
-
-keyboard = InlineKeyboardMarkup([
-    [
-        InlineKeyboardButton(
-            "✅ Accept",
-            callback_data=f"rank_accept_{match_id}"
-        ),
-
-        InlineKeyboardButton(
-            "❌ Decline",
-            callback_data=f"rank_decline_{match_id}"
-        )
-    ]
-])
-
-sent_players = []
-
-for player_id in (
-    match["player1"],
-    match["player2"]
-):
+    text = (
+        "⚔️ حریف پیدا شد!\n\n"
+        "هر دو بازیکن باید مسابقه را قبول کنند.\n"
+        f"⏳ زمان پاسخ: {ACCEPT_TIMEOUT} ثانیه"
+    )
 
     try:
-
         await context.bot.send_message(
-            chat_id=player_id,
-            text=(
-                "⚔️ RANKED OPPONENT FOUND!\n\n"
-                "حریف مناسبی پیدا شد.\n"
-                "۶۰ ثانیه فرصت داری درخواست رو قبول کنی."
-            ),
+            chat_id=p1,
+            text=text,
             reply_markup=keyboard
         )
 
-        sent_players.append(player_id)
-
-    except Exception:
-
-        cancel_match(match_id)
-
-        leave_queue(match["player1"])
-        leave_queue(match["player2"])
-
-        for sent_id in sent_players:
-
-            try:
-                await context.bot.send_message(
-                    chat_id=sent_id,
-                    text="❌ ارسال درخواست برای حریف ممکن نشد. مسابقه لغو شد."
-                )
-            except Exception:
-                pass
-
-        return
-
-context.job_queue.run_once(
-    expire_match,
-    when=ACCEPT_TIMEOUT,
-    data={"match_id": match_id},
-    name=f"rank_expire_{match_id}"
-)
-
-=====================================
-
-REMOVE SEARCH JOB
-
-=====================================
-
-def remove_search_job(context, user_id):
-
-if not context.job_queue:
-    return
-
-for job in context.job_queue.get_jobs_by_name(
-    f"ranked_search_{user_id}"
-):
-
-    job.schedule_removal()
-
-=====================================
-
-CANCEL MATCH
-
-=====================================
-
-def cancel_match(match_id):
-
-with db.connect() as conn:
-
-    match = conn.execute("""
-    SELECT *
-    FROM ranked_matches
-    WHERE id = ?
-    AND status = 'pending'
-    """, (match_id,)).fetchone()
-
-    if not match:
-        return None
-
-    conn.execute("""
-    UPDATE ranked_matches
-    SET status = 'cancelled'
-    WHERE id = ?
-    AND status = 'pending'
-    """, (match_id,))
-
-return match
-
-=====================================
-
-EXPIRE MATCH
-
-=====================================
-
-async def expire_match(context):
-
-match_id = context.job.data["match_id"]
-
-match = cancel_match(match_id)
-
-if not match:
-    return
-
-for player_id in (
-    match["player1"],
-    match["player2"]
-):
-
-    try:
-
         await context.bot.send_message(
-            chat_id=player_id,
-            text=(
-                "⌛ درخواست Ranked منقضی شد.\n"
-                "یکی از بازیکن‌ها در زمان مقرر پاسخ نداد."
-            )
+            chat_id=p2,
+            text=text,
+            reply_markup=keyboard
         )
 
     except Exception:
-        pass
-
-=====================================
-
-ACCEPT / DECLINE
-
-=====================================
-
-async def ranked_response(
-update: Update,
-context: ContextTypes.DEFAULT_TYPE
-):
-
-query = update.callback_query
-user_id = query.from_user.id
-
-parts = query.data.split("_")
-
-action = parts[1]
-match_id = int(parts[2])
-
-other_id = None
-should_start = False
-declined = False
-expired = False
-
-with db.connect() as conn:
-
-    conn.execute("BEGIN IMMEDIATE")
-
-    match = conn.execute("""
-    SELECT *
-    FROM ranked_matches
-    WHERE id = ?
-    AND status = 'pending'
-    """, (match_id,)).fetchone()
-
-    if not match:
-
-        await query.answer(
-            "این درخواست فعال نیست.",
-            show_alert=True
-        )
-
+        await cancel_match(match_id)
         return
 
-    if user_id not in (
-        match["player1"],
-        match["player2"]
-    ):
-
-        await query.answer(
-            "این درخواست برای تو نیست.",
-            show_alert=True
-        )
-
-        return
-
-    other_id = (
-        match["player2"]
-        if user_id == match["player1"]
-        else match["player1"]
+    context.job_queue.run_once(
+        expire_match,
+        ACCEPT_TIMEOUT,
+        data={"match_id": match_id},
+        name=f"rank_expire_{match_id}",
     )
 
-    if time.time() > match["expires_at"]:
 
+async def cancel_match(match_id):
+    with db.connect() as conn:
         conn.execute("""
-        UPDATE ranked_matches
-        SET status = 'cancelled'
-        WHERE id = ?
-        AND status = 'pending'
+            UPDATE ranked_matches
+            SET status = 'cancelled'
+            WHERE id = ? AND status = 'pending'
         """, (match_id,))
 
-        expired = True
 
-    elif action == "decline":
+async def expire_match(context: ContextTypes.DEFAULT_TYPE):
+    match_id = context.job.data["match_id"]
+
+    with db.connect() as conn:
+        match = conn.execute("""
+            SELECT *
+            FROM ranked_matches
+            WHERE id = ? AND status = 'pending'
+        """, (match_id,)).fetchone()
+
+        if not match:
+            return
 
         conn.execute("""
-        UPDATE ranked_matches
-        SET status = 'cancelled'
-        WHERE id = ?
-        AND status = 'pending'
+            UPDATE ranked_matches
+            SET status = 'expired'
+            WHERE id = ? AND status = 'pending'
         """, (match_id,))
 
-        declined = True
+    for user_id in (match["player1"], match["player2"]):
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="⌛ زمان قبول مسابقه به پایان رسید."
+            )
+        except Exception:
+            pass
 
-    elif action == "accept":
+
+def remove_search_job(context, user_id):
+    jobs = context.job_queue.get_jobs_by_name(
+        f"rank_search_{user_id}"
+    )
+
+    for job in jobs:
+        job.schedule_removal()
+async def ranked_response(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    parts = query.data.split("_")
+
+    action = parts[1]
+    match_id = int(parts[2])
+
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        match = conn.execute("""
+            SELECT *
+            FROM ranked_matches
+            WHERE id = ?
+        """, (match_id,)).fetchone()
+
+        if not match or match["status"] != "pending":
+            await query.answer(
+                "این مسابقه دیگر فعال نیست.",
+                show_alert=True
+            )
+            return
+
+        if user_id not in (
+            match["player1"],
+            match["player2"]
+        ):
+            await query.answer(
+                "این درخواست برای تو نیست.",
+                show_alert=True
+            )
+            return
+
+        if time.time() - match["created_at"] > ACCEPT_TIMEOUT:
+            conn.execute("""
+                UPDATE ranked_matches
+                SET status = 'expired'
+                WHERE id = ? AND status = 'pending'
+            """, (match_id,))
+
+            await query.answer(
+                "زمان قبول مسابقه تمام شده.",
+                show_alert=True
+            )
+            return
+
+        if action == "decline":
+            conn.execute("""
+                UPDATE ranked_matches
+                SET status = 'cancelled'
+                WHERE id = ? AND status = 'pending'
+            """, (match_id,))
+
+            await query.answer("مسابقه رد شد.")
+            context.job_queue.run_once(
+                notify_declined,
+                0,
+                data={
+                    "player1": match["player1"],
+                    "player2": match["player2"],
+                }
+            )
+            return
+
+        if action != "accept":
+            await query.answer("درخواست نامعتبر است.")
+            return
 
         column = (
-            "accepted1"
+            "player1_accepted"
             if user_id == match["player1"]
-            else "accepted2"
+            else "player2_accepted"
         )
 
         conn.execute(
-            f"""
-            UPDATE ranked_matches
-            SET {column} = 1
-            WHERE id = ?
-            AND status = 'pending'
-            """,
+            f"UPDATE ranked_matches SET {column} = 1 WHERE id = ?",
             (match_id,)
         )
 
         updated = conn.execute("""
-        SELECT *
-        FROM ranked_matches
-        WHERE id = ?
+            SELECT *
+            FROM ranked_matches
+            WHERE id = ?
         """, (match_id,)).fetchone()
 
-        if updated["accepted1"] and updated["accepted2"]:
+        both_accepted = (
+            updated["player1_accepted"]
+            and updated["player2_accepted"]
+        )
 
-            claim = conn.execute("""
-            UPDATE ranked_matches
-            SET status = 'starting'
-            WHERE id = ?
-            AND status = 'pending'
-            AND accepted1 = 1
-            AND accepted2 = 1
+        if both_accepted:
+            cursor = conn.execute("""
+                UPDATE ranked_matches
+                SET status = 'starting'
+                WHERE id = ? AND status = 'pending'
             """, (match_id,))
 
-            should_start = claim.rowcount == 1
+            should_start = cursor.rowcount == 1
+        else:
+            should_start = False
 
-if expired:
-
-    await query.answer(
-        "زمان درخواست تمام شده.",
-        show_alert=True
-    )
-
-    await query.edit_message_text(
-        "⌛ درخواست مسابقه منقضی شد."
-    )
+    await query.answer("مسابقه قبول شد.")
 
     try:
-        await context.bot.send_message(
-            chat_id=other_id,
-            text="⌛ درخواست Ranked منقضی شد."
+        await query.edit_message_reply_markup(
+            reply_markup=None
         )
     except Exception:
         pass
 
-    return
-
-if declined:
-
-    await query.answer("درخواست رد شد.")
-
-    await query.edit_message_text(
-        "❌ مسابقه لغو شد."
-    )
-
-    try:
-        await context.bot.send_message(
-            chat_id=other_id,
-            text="❌ حریف درخواست مسابقه را رد کرد."
-        )
-    except Exception:
-        pass
-
-    return
-
-await query.answer("درخواست پذیرفته شد.")
-
-await query.edit_message_text(
-    "✅ درخواست مسابقه پذیرفته شد."
-)
-
-if should_start:
-
-    await start_ranked_battle(
-        context,
-        match_id
-    )
-
-else:
-
-    try:
-
-        await context.bot.send_message(
-            chat_id=other_id,
-            text="حریف درخواست رو قبول کرد. منتظر تأیید تو هستیم."
+    if should_start:
+        await start_ranked_battle(
+            context,
+            match_id
         )
 
-    except Exception:
-        pass
 
-=====================================
+async def notify_declined(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
 
-START RANKED BATTLE
-
-=====================================
-
-async def start_ranked_battle(
-context,
-match_id
-):
-
-if not RANKED_CHAT_ID:
-
-    with db.connect() as conn:
-
-        conn.execute("""
-        UPDATE ranked_matches
-        SET status = 'cancelled'
-        WHERE id = ?
-        AND status = 'starting'
-        """, (match_id,))
-
-    return
-
-with db.connect() as conn:
-
-    match = conn.execute("""
-    SELECT *
-    FROM ranked_matches
-    WHERE id = ?
-    AND status = 'starting'
-    AND accepted1 = 1
-    AND accepted2 = 1
-    """, (match_id,)).fetchone()
-
-if not match:
-    return
-
-player1 = get_player(match["player1"])
-player2 = get_player(match["player2"])
-
-if not player1 or not player2:
-
-    cancel_starting_match(match_id)
-    return
-
-if is_dead(match["player1"]) or is_dead(match["player2"]):
-
-    cancel_starting_match(match_id)
-
-    for player_id in (
-        match["player1"],
-        match["player2"]
-    ):
-
+    for user_id in (data["player1"], data["player2"]):
         try:
             await context.bot.send_message(
-                chat_id=player_id,
-                text="❌ مسابقه لغو شد؛ یکی از بازیکنان در وضعیت DEAD قرار دارد."
+                chat_id=user_id,
+                text="❌ مسابقه توسط یکی از بازیکنان رد شد."
             )
         except Exception:
             pass
 
-    return
 
-try:
-
-    battle_message = await context.bot.send_message(
-        chat_id=int(RANKED_CHAT_ID),
-        text=(
-            "🏆 RANKED MATCH STARTED!\n\n"
-            f"👤 {player1['name']}\n"
-            f"❤️ HP: {player1['hp']}\n\n"
-            "⚔️ VS ⚔️\n\n"
-            f"👤 {player2['name']}\n"
-            f"❤️ HP: {player2['hp']}\n\n"
-            "برای حمله، روی همین پیام ریپلای کن "
-            "و اسم یکی از مهارت‌های خودت رو بنویس."
-        )
-    )
-
-except Exception:
-
-    logger.exception(
-        "Could not send ranked battle message."
-    )
-
-    cancel_starting_match(match_id)
-
-    for player_id in (
-        match["player1"],
-        match["player2"]
-    ):
-
-        try:
-            await context.bot.send_message(
-                chat_id=player_id,
-                text="❌ امکان شروع مسابقه در گروه آرنا وجود نداشت."
-            )
-        except Exception:
-            pass
-
-    return
-
-# ثبت پیام مبارزه و فعال‌سازی مسابقه
-
-with db.connect() as conn:
-
-    conn.execute("BEGIN IMMEDIATE")
-
-    current = conn.execute("""
-    SELECT status
-    FROM ranked_matches
-    WHERE id = ?
-    """, (match_id,)).fetchone()
-
-    if not current or current["status"] != "starting":
+async def start_ranked_battle(context, match_id):
+    if not RANKED_CHAT_ID:
+        await cancel_starting_match(match_id)
         return
 
-    conn.execute("""
-    INSERT INTO pvp_matches (
-        chat_id,
-        message_id,
-        player1,
-        player2,
-        status,
-        created_at
+    with db.connect() as conn:
+        match = conn.execute("""
+            SELECT *
+            FROM ranked_matches
+            WHERE id = ? AND status = 'starting'
+        """, (match_id,)).fetchone()
+
+    if not match:
+        return
+
+    p1 = get_player(match["player1"])
+    p2 = get_player(match["player2"])
+
+    if not p1 or not p2:
+        await cancel_starting_match(match_id)
+        return
+
+    if is_dead(match["player1"]) or is_dead(match["player2"]):
+        await cancel_starting_match(match_id)
+        return
+
+    text = (
+        "⚔️ RANKED MATCH ⚔️\n\n"
+        f"👤 بازیکن اول: {p1['name']}\n"
+        f"👤 بازیکن دوم: {p2['name']}\n\n"
+        "برای حمله، به همین پیام ریپلای کن و نام مهارتت را بنویس.\n"
+        "دفاع به‌صورت خودکار محاسبه می‌شود."
     )
-    VALUES (?, ?, ?, ?, 'active', ?)
-    """, (
-        battle_message.chat_id,
-        battle_message.message_id,
-        match["player1"],
-        match["player2"],
-        time.time()
-    ))
-
-    conn.execute("""
-    UPDATE ranked_matches
-    SET status = 'active',
-        battle_message_id = ?,
-        battle_chat_id = ?
-    WHERE id = ?
-    AND status = 'starting'
-    """, (
-        battle_message.message_id,
-        battle_message.chat_id,
-        match_id
-    ))
-
-for player_id in (
-    match["player1"],
-    match["player2"]
-):
 
     try:
-
-        await context.bot.send_message(
-            chat_id=player_id,
-            text=(
-                "🏆 مسابقه Ranked شروع شد!\n"
-                "به گروه Ranked Arena برو و روی پیام مبارزه ریپلای کن."
-            )
+        battle_message = await context.bot.send_message(
+            chat_id=int(RANKED_CHAT_ID),
+            text=text
         )
 
     except Exception:
-        pass
+        await cancel_starting_match(match_id)
+        return
 
-def cancel_starting_match(match_id):
+    with db.connect() as conn:
+        cursor = conn.execute("""
+            UPDATE ranked_matches
+            SET status = 'active',
+                battle_chat_id = ?,
+                battle_message_id = ?
+            WHERE id = ? AND status = 'starting'
+        """, (
+            battle_message.chat_id,
+            battle_message.message_id,
+            match_id
+        ))
 
-with db.connect() as conn:
+        if cursor.rowcount != 1:
+            return
 
-    conn.execute("""
-    UPDATE ranked_matches
-    SET status = 'cancelled'
-    WHERE id = ?
-    AND status = 'starting'
-    """, (match_id,))
+        conn.execute("""
+            INSERT INTO pvp_matches (
+                chat_id,
+                message_id,
+                player1,
+                player2,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, 'active', ?)
+        """, (
+            battle_message.chat_id,
+            battle_message.message_id,
+            match["player1"],
+            match["player2"],
+            time.time()
+        ))
 
-=====================================
+    for user_id in (match["player1"], match["player2"]):
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "🔥 مسابقه رنک شروع شد!\n\n"
+                    "برای حمله وارد گروه مسابقه شو و به پیام مبارزه ریپلای کن."
+                )
+            )
+        except Exception:
+            pass
 
-CANCEL SEARCH BUTTON
 
-=====================================
+async def cancel_starting_match(match_id):
+    with db.connect() as conn:
+        conn.execute("""
+            UPDATE ranked_matches
+            SET status = 'cancelled'
+            WHERE id = ? AND status = 'starting'
+        """, (match_id,))
+
 
 async def ranked_cancel(
-update: Update,
-context: ContextTypes.DEFAULT_TYPE
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+    user_id = update.effective_user.id
 
-query = update.callback_query
-user_id = query.from_user.id
+    await leave_queue(user_id)
+    remove_search_job(context, user_id)
 
-leave_queue(user_id)
+    await update.message.reply_text(
+        "از صف جستجوی رنک خارج شدی."
+    )
 
-remove_search_job(context, user_id)
-
-await query.answer(
-    "جست‌وجو لغو شد."
-)
-
-await query.edit_message_text(
-    "❌ Ranked Search Cancelled"
-)
-
-=====================================
-
-RANK PROFILE
-
-=====================================
 
 async def rank_command(
-update: Update,
-context: ContextTypes.DEFAULT_TYPE
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
+    user_id = update.effective_user.id
 
-user_id = update.effective_user.id
+    profile = get_rank_profile(user_id)
 
-if not get_player(user_id):
-
-    await update.effective_message.reply_text(
-        "ابتدا با /start ثبت‌نام کن."
+    text = (
+        "🏆 RANK PROFILE\n\n"
+        f"🥇 رتبه: {profile['rank']}\n"
+        f"⭐ امتیاز: {profile['points']}\n"
+        f"✅ برد: {profile['wins']}\n"
+        f"❌ باخت: {profile['losses']}\n"
+        f"🔥 برد متوالی: {profile['streak']}"
     )
 
-    return
+    await update.effective_message.reply_text(text)
 
-profile = get_rank_profile(user_id)
 
-if not profile:
-    await update.effective_message.reply_text(
-        "اطلاعات رنک پیدا نشد."
+def setup_ranked(application):
+    init_ranked_db()
+
+    application.add_handler(
+        CommandHandler("rank", rank_command)
     )
-    return
 
-await update.effective_message.reply_text(
-    "🏆 RANK PROFILE\n\n"
-    f"🥇 Rank: {profile['rank'
+    application.add_handler(
+        CommandHandler("rankcancel", ranked_cancel)
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            ranked_response,
+            pattern=r"^rank_(accept|decline)_\d+$"
+        )
+    )
+
+    application.add_handler(
+        CommandHandler("ranked", ranked_search)
+    )

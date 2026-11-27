@@ -1,3 +1,4 @@
+from awakening import setup_awakening
 from telegram import (
     Update,
     InlineKeyboardButton,

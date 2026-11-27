@@ -26,6 +26,7 @@ from progression import (
 
 from stats_ui import setup_stats
 from pvp import setup_pvp
+from ranked import setup_ranked
 
 
 # =====================================
@@ -154,7 +155,7 @@ def battle_menu():
         [
             InlineKeyboardButton(
                 "🏆 Ranked Match",
-                callback_data="ranked"
+                callback_data="ranked_search"
             )
         ],
 
@@ -252,9 +253,10 @@ async def help_command(
         "/start - شروع بازی\n"
         "/help - راهنما\n"
         "/skills - مشاهده مهارت‌ها\n"
-        "/duel - شروع مبارزه با ریپلای\n\n"
-        "برای مبارزه در گروه، روی پیام حریفت "
-        "ریپلای کن و /duel بفرست."
+        "/rank - مشاهده رتبه\n"
+        "/duel - مبارزه دوستانه با ریپلای\n\n"
+        "برای مبارزه دوستانه در گروه، "
+        "روی پیام حریفت ریپلای کن و /duel بفرست."
     )
 
 
@@ -271,15 +273,19 @@ async def skills_command(
     message = update.effective_message
 
     if message.chat.type != "private":
+
         await message.reply_text(
             "مهارت‌ها رو در چت خصوصی بات مشاهده کن."
         )
+
         return
 
     if not get_player(user.id):
+
         await message.reply_text(
             "ابتدا با دستور /start ثبت‌نام کن."
         )
+
         return
 
     unlock_available_skills(user.id)
@@ -301,19 +307,23 @@ async def home_callback(
     query = update.callback_query
 
     if query.message.chat.type != "private":
+
         await query.answer(
             "این منو فقط در چت خصوصی قابل استفاده است.",
             show_alert=True
         )
+
         return
 
     player = get_player(query.from_user.id)
 
     if not player:
+
         await query.answer(
             "ابتدا ثبت‌نام کن.",
             show_alert=True
         )
+
         return
 
     await query.answer()
@@ -335,6 +345,7 @@ async def menu_callback(
 ):
 
     query = update.callback_query
+
     user_id = query.from_user.id
     data = query.data
 
@@ -404,20 +415,7 @@ async def menu_callback(
 
         await query.edit_message_text(
             "🥊 TRAINING CENTER\n\n"
-            "بخش تمرینی در مرحله بعدی به سیستم مبارزه "
-            "و مهارت‌ها متصل می‌شه.",
-            reply_markup=back_button()
-        )
-
-    # =================================
-    # RANKED MATCH
-    # =================================
-
-    elif data == "ranked":
-
-        await query.edit_message_text(
-            "🏆 RANKED MATCH\n\n"
-            "سیستم پیدا کردن حریف و مسابقات رتبه‌بندی "
+            "سیستم تمرین و مبارزه با حریف تمرینی "
             "در مرحله بعدی پیاده‌سازی می‌شه.",
             reply_markup=back_button()
         )
@@ -524,34 +522,8 @@ async def menu_callback(
 
         await query.edit_message_text(
             "🛒 SHADOW SHOP\n\n"
-            "بخش فروشگاه در مرحله بعدی ساخته می‌شه.",
+            "فروشگاه در مرحله بعدی پیاده‌سازی می‌شه.",
             reply_markup=back_button()
-        )
-
-    # =================================
-    # AWAKENING
-    # =================================
-
-    elif data == "awakening":
-
-        await query.edit_message_text(
-            "✨ AWAKENING SYSTEM\n\n"
-            "برای مشاهده و انجام بیداری، "
-            "از دکمه زیر استفاده کن.",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "✨ Open Awakening",
-                        callback_data="awakening"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
-            ])
         )
 
     # =================================
@@ -580,7 +552,18 @@ async def menu_callback(
             "Hidden Quests\n"
             "Achievements\n"
             "Special Quests\n\n"
-            "سیستم مأموریت‌ها در مرحله بعدی ساخته می‌شه.",
+            "سیستم مأموریت‌ها در مراحل بعدی ساخته می‌شه.",
+            reply_markup=back_button()
+        )
+
+    # =================================
+    # UNKNOWN
+    # =================================
+
+    else:
+
+        await query.edit_message_text(
+            "این بخش هنوز آماده نشده است.",
             reply_markup=back_button()
         )
 
@@ -611,14 +594,17 @@ def main():
         .build()
     )
 
-    # AWAKENING
+    # AWAKENING SYSTEM
     setup_awakening(app)
 
-    # STATS
+    # STATS SYSTEM
     setup_stats(app)
 
-    # PVP + REVIVAL
+    # PVP + REVIVAL SYSTEM
     setup_pvp(app)
+
+    # RANKED MATCH SYSTEM
+    setup_ranked(app)
 
     # COMMANDS
     app.add_handler(
@@ -632,6 +618,9 @@ def main():
     app.add_handler(
         CommandHandler("skills", skills_command)
     )
+
+    # RANK PROFILE COMMAND
+    # در ranked.py ثبت شده است.
 
     # HOME BUTTON
     app.add_handler(

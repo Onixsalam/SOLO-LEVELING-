@@ -1,4 +1,5 @@
 import time
+import logging
 
 from telegram import Update
 from telegram.ext import (
@@ -11,6 +12,10 @@ from telegram.ext import (
 import database as db
 import combat
 import pvp_lifecycle as lifecycle
+import daily_quests
+
+
+logger = logging.getLogger(__name__)
 
 
 # =====================================
@@ -300,11 +305,17 @@ async def combat_reply(
     attacker = get_player(attacker_id)
     defender = get_player(defender_id)
 
+    if not attacker or not defender:
+        return
+
     # =================================
     # MATCH FINISHED
     # =================================
 
     if result["defeated"]:
+
+        ranked_match = None
+        ranked_updated = False
 
         with db.connect() as conn:
 
@@ -331,32 +342,94 @@ async def combat_reply(
 
             if ranked_match:
 
-                ranked_updated = conn.execute("""
+                ranked_result = conn.execute("""
                 UPDATE ranked_matches
                 SET status = 'finished'
                 WHERE id = ?
                 AND status = 'active'
                 """, (ranked_match["id"],))
 
-            else:
-                ranked_updated = None
+                ranked_updated = ranked_result.rowcount == 1
 
-        # Ranked match: award points only once.
-        if ranked_match and ranked_updated.rowcount == 1:
+        # =================================
+        # RANKED MATCH
+        # =================================
 
-            lifecycle.finish_pvp(
+        if ranked_match:
+
+            # اگر مسابقه قبلاً ثبت شده باشد،
+            # آن را Friendly حساب نمی‌کنیم.
+            if not ranked_updated:
+                return
+
+            ranking_result = lifecycle.finish_pvp(
                 winner_id=attacker_id,
                 loser_id=defender_id
             )
 
-            points_text = (
-                f"🏆 +{lifecycle.WIN_POINTS} Rank Points\n"
-                f"📉 -{lifecycle.LOSE_POINTS} Rank Points"
-            )
+            # ثبت پیشرفت مأموریت روزانه
+            try:
+
+                daily_quests.add_quest_progress(
+                    attacker_id,
+                    "ranked_win",
+                    1
+                )
+
+            except Exception:
+
+                logger.exception(
+                    "Failed to update ranked daily quest."
+                )
+
+            if ranking_result:
+
+                winner_points = ranking_result.get(
+                    "winner_points",
+                    lifecycle.WIN_POINTS
+                )
+
+                loser_points = ranking_result.get(
+                    "loser_points",
+                    lifecycle.LOSE_POINTS
+                )
+
+                streak_bonus = ranking_result.get(
+                    "streak_bonus",
+                    0
+                )
+
+                protected = ranking_result.get(
+                    "protected",
+                    False
+                )
+
+                points_text = (
+                    "🏆 RANKED MATCH\n\n"
+                    f"📈 Winner: +{winner_points} RP\n"
+                    f"📉 Loser: -{loser_points} RP\n"
+                    f"🔥 Streak Bonus: +{streak_bonus} RP\n"
+                )
+
+                if protected:
+                    points_text += (
+                        "🛡️ Rank Protection فعال شد؛ "
+                        "از کاهش امتیاز جلوگیری کرد.\n"
+                    )
+
+            else:
+
+                points_text = (
+                    "🏆 Ranked Match Finished\n"
+                    "نتیجه رنک ثبت شد."
+                )
+
+        # =================================
+        # FRIENDLY MATCH
+        # =================================
 
         else:
 
-            # Friendly duel: no rank points.
             finish_friendly_pvp(
                 winner_id=attacker_id,
                 loser_id=defender_id
@@ -366,6 +439,10 @@ async def combat_reply(
                 "🤝 Friendly Match\n"
                 "امتیاز رنک تغییری نکرد."
             )
+
+        # =================================
+        # FINAL RESULT
+        # =================================
 
         await message.reply_text(
             "🏆 MATCH FINISHED!\n\n"
@@ -379,9 +456,9 @@ async def combat_reply(
 
         return
 
-    # =================================
+    # =====================================
     # ATTACK RESULT
-    # =================================
+    # =====================================
 
     await message.reply_text(
         "⚔️ ATTACK RESULT\n\n"
@@ -404,7 +481,10 @@ def setup_pvp(application):
     lifecycle.setup_lifecycle(application)
 
     application.add_handler(
-        CommandHandler("duel", duel_command)
+        CommandHandler(
+            "duel",
+            duel_command
+        )
     )
 
     application.add_handler(

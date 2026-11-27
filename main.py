@@ -12,6 +12,8 @@ from telegram.ext import (
 )
 
 import database as db
+import combat
+
 from config import BOT_TOKEN, GAME_NAME
 
 from awakening import setup_awakening
@@ -23,6 +25,7 @@ from progression import (
 )
 
 from stats_ui import setup_stats
+from pvp import setup_pvp
 
 
 # =====================================
@@ -91,7 +94,7 @@ def battle_menu():
 
 
 # =====================================
-# START COMMAND
+# START
 # =====================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,7 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================
-# HELP COMMAND
+# HELP
 # =====================================
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,13 +137,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 SHADOW LEGACY GUIDE\n\n"
         "/start - شروع بازی\n"
         "/help - راهنما\n"
-        "/skills - مشاهده مهارت‌ها\n\n"
+        "/skills - مشاهده مهارت‌ها\n"
+        "/duel - شروع مبارزه با Reply\n\n"
         "برای استفاده از امکانات بازی از منوی اصلی استفاده کن."
     )
 
 
 # =====================================
-# SKILLS COMMAND
+# SKILLS
 # =====================================
 
 async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -168,7 +172,7 @@ async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================
-# HOME CALLBACK
+# HOME
 # =====================================
 
 async def home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,7 +193,7 @@ async def home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================
-# GENERAL MENU CALLBACK
+# MENU CALLBACK
 # =====================================
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -229,12 +233,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Gold: {player['gold']}\n"
             f"Crystals: {player['crystals']}",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -256,18 +255,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 Stat Points: {player['stat_points']}\n"
             f"⚔ Power: {player['power']}",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "📈 Upgrade Stats",
-                        callback_data="stats_menu"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("📈 Upgrade Stats", callback_data="stats_menu")],
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -277,7 +266,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(
             "⚔️ BATTLE CENTER\n\n"
-            "بخش موردنظرت رو انتخاب کن:",
+            "یکی از بخش‌های مبارزه رو انتخاب کن:",
             reply_markup=battle_menu()
         )
 
@@ -289,12 +278,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔥 TRAINING CENTER\n\n"
             "سیستم تمرین در مرحله بعدی فعال می‌شه.",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="battle"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="battle")]
             ])
         )
 
@@ -305,29 +289,18 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         items = db.get_inventory(user.id)
 
         if not items:
-
             text = "🎒 INVENTORY\n\nکیف تو خالیه."
 
         else:
-
             text = "🎒 INVENTORY\n\n"
 
             for item in items:
-
-                text += (
-                    f"📦 {item['item_name']} "
-                    f"× {item['quantity']}\n"
-                )
+                text += f"📦 {item['item_name']} × {item['quantity']}\n"
 
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -338,18 +311,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shadows = db.get_shadows(user.id)
 
         if not shadows:
-
-            text = (
-                "👥 SHADOW ARMY\n\n"
-                "هنوز هیچ سایه‌ای نداری."
-            )
+            text = "👥 SHADOW ARMY\n\nهنوز هیچ سایه‌ای نداری."
 
         else:
-
             text = "👥 SHADOW ARMY\n\n"
 
             for shadow in shadows:
-
                 text += (
                     f"🌑 {shadow['shadow_name']}\n"
                     f"Rank: {shadow['shadow_rank']}\n\n"
@@ -358,12 +325,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -375,12 +337,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🛒 SHOP\n\n"
             "فروشگاه در مرحله بعدی ساخته می‌شه.",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -392,12 +349,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🏰 DUNGEON GATE\n\n"
             "سیستم دانجن در مرحله بعدی فعال می‌شه.",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -409,12 +361,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🏆 RANKED MATCH\n\n"
             "سیستم رنک مچ در مرحله بعدی ساخته می‌شه.",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="battle"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="battle")]
             ])
         )
 
@@ -426,12 +373,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📜 QUEST CENTER\n\n"
             "سیستم مأموریت‌ها در مرحله بعدی ساخته می‌شه.",
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -444,12 +386,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             skills_text(user.id),
             reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "🔙 Back",
-                        callback_data="home"
-                    )
-                ]
+                [InlineKeyboardButton("🔙 Back", callback_data="home")]
             ])
         )
 
@@ -460,27 +397,33 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
 
-    # Initialize database
+    # Database
     db.init_db()
 
-    # Initialize progression database
+    # Progression
     init_progression_db()
 
-    # Create application
+    # Combat database
+    combat.init_combat_db()
+
+    # Telegram application
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Awakening system
+    # Awakening
     setup_awakening(app)
 
-    # Stats upgrade system
+    # Stats
     setup_stats(app)
+
+    # PvP
+    setup_pvp(app)
 
     # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("skills", skills_command))
 
-    # Home navigation
+    # Home
     app.add_handler(
         CallbackQueryHandler(
             home_callback,
@@ -488,7 +431,7 @@ def main():
         )
     )
 
-    # General menu handler
+    # General menu
     app.add_handler(
         CallbackQueryHandler(menu_callback)
     )
@@ -497,10 +440,6 @@ def main():
 
     app.run_polling()
 
-
-# =====================================
-# RUN
-# =====================================
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,4 @@
-import re
-
-import database as db
-import combat
+import time
 
 from telegram import Update
 from telegram.ext import (
@@ -11,9 +8,13 @@ from telegram.ext import (
     filters
 )
 
+import database as db
+import combat
+import pvp_lifecycle as lifecycle
+
 
 # =====================================
-# INITIALIZE PVP DATABASE
+# DATABASE
 # =====================================
 
 def init_pvp_db():
@@ -24,17 +25,53 @@ def init_pvp_db():
         CREATE TABLE IF NOT EXISTS pvp_matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL,
-            message_id INTEGER,
+            message_id INTEGER NOT NULL,
             player1 INTEGER NOT NULL,
             player2 INTEGER NOT NULL,
             status TEXT DEFAULT 'active',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at REAL
         )
+        """)
+
+        conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pvp_message
+        ON pvp_matches(chat_id, message_id)
         """)
 
 
 # =====================================
-# START DUEL
+# PLAYER CHECK
+# =====================================
+
+def get_player(user_id):
+
+    with db.connect() as conn:
+
+        return conn.execute("""
+        SELECT *
+        FROM players
+        WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+
+def is_player_dead(user_id):
+
+    player = get_player(user_id)
+
+    if not player:
+        return True
+
+    if player["is_dead"]:
+        return True
+
+    if lifecycle.get_revive_remaining(user_id) > 0:
+        return True
+
+    return False
+
+
+# =====================================
+# DUEL COMMAND
 # =====================================
 
 async def duel_command(
@@ -42,78 +79,88 @@ async def duel_command(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    message = update.message
+    message = update.effective_message
+    user = update.effective_user
 
     if message.chat.type == "private":
         await message.reply_text(
-            "برای شروع PvP باید در گروه و با Reply به پیام حریف دستور /duel رو بفرستی."
+            "برای شروع مبارزه باید داخل گروه باشی."
         )
         return
 
     if not message.reply_to_message:
         await message.reply_text(
-            "برای شروع مبارزه، روی پیام حریف Reply کن و /duel بفرست."
+            "برای مبارزه باید روی پیام حریفت ریپلای کنی و /duel بزنی."
         )
         return
 
-    attacker = message.from_user
-    defender = message.reply_to_message.from_user
+    opponent = message.reply_to_message.from_user
 
-    if not attacker or not defender:
+    if opponent.is_bot:
+        await message.reply_text(
+            "نمی‌تونی با ربات مبارزه کنی."
+        )
         return
 
-    if attacker.is_bot or defender.is_bot:
-        await message.reply_text("مبارزه با ربات امکان‌پذیر نیست.")
+    if opponent.id == user.id:
+        await message.reply_text(
+            "نمی‌تونی با خودت مبارزه کنی."
+        )
         return
 
-    if attacker.id == defender.id:
-        await message.reply_text("نمی‌تونی با خودت مبارزه کنی.")
-        return
-
-    player1 = db.get_player(attacker.id)
-    player2 = db.get_player(defender.id)
+    player1 = get_player(user.id)
+    player2 = get_player(opponent.id)
 
     if not player1 or not player2:
         await message.reply_text(
-            "هر دو بازیکن باید ابتدا در چت خصوصی ربات /start رو بزنن."
+            "هر دو بازیکن باید ابتدا با دستور /start ثبت‌نام کنند."
         )
         return
 
-    if player1["hp"] <= 0 or player2["hp"] <= 0:
+    if is_player_dead(user.id):
         await message.reply_text(
-            "یکی از بازیکنان در وضعیت مناسبی برای مبارزه نیست."
+            "تو هنوز در وضعیت DEAD هستی و نمی‌تونی مبارزه کنی."
+        )
+        return
+
+    if is_player_dead(opponent.id):
+        await message.reply_text(
+            "حریفت فعلاً قادر به مبارزه نیست."
         )
         return
 
     with db.connect() as conn:
 
-        existing = conn.execute("""
-        SELECT id FROM pvp_matches
+        active = conn.execute("""
+        SELECT id
+        FROM pvp_matches
         WHERE status = 'active'
         AND (
             player1 IN (?, ?)
             OR player2 IN (?, ?)
         )
         """, (
-            attacker.id,
-            defender.id,
-            attacker.id,
-            defender.id
+            user.id,
+            opponent.id,
+            user.id,
+            opponent.id
         )).fetchone()
 
-        if existing:
+        if active:
             await message.reply_text(
-                "یکی از این بازیکنان در حال حاضر در یک مبارزه فعال است."
+                "یکی از بازیکن‌ها در حال حاضر مبارزه فعالی داره."
             )
             return
 
     battle_message = await message.reply_text(
         "⚔️ PVP BATTLE STARTED!\n\n"
-        f"🥊 {attacker.first_name}\n"
-        f"VS\n"
-        f"🥊 {defender.first_name}\n\n"
-        "برای حمله، روی همین پیام Reply کن و اسم یکی از Skillهای آزادشده‌ات رو بنویس.\n\n"
-        "🛡 دفاع به‌صورت خودکار محاسبه می‌شه."
+        f"👤 {user.first_name}\n"
+        f"❤️ HP: {player1['hp']}\n\n"
+        "VS\n\n"
+        f"👤 {opponent.first_name}\n"
+        f"❤️ HP: {player2['hp']}\n\n"
+        "برای حمله، روی همین پیام ریپلای کن "
+        "و اسم یکی از مهارت‌هات رو بنویس."
     )
 
     with db.connect() as conn:
@@ -123,19 +170,22 @@ async def duel_command(
             chat_id,
             message_id,
             player1,
-            player2
+            player2,
+            status,
+            created_at
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 'active', ?)
         """, (
             message.chat_id,
             battle_message.message_id,
-            attacker.id,
-            defender.id
+            user.id,
+            opponent.id,
+            time.time()
         ))
 
 
 # =====================================
-# SKILL REPLY
+# COMBAT REPLY
 # =====================================
 
 async def combat_reply(
@@ -143,25 +193,14 @@ async def combat_reply(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    message = update.message
+    message = update.effective_message
+    user = update.effective_user
 
     if not message or not message.reply_to_message:
         return
 
-    if message.chat.type == "private":
+    if not message.text:
         return
-
-    user = message.from_user
-
-    if not user or user.is_bot:
-        return
-
-    skill_name = message.text.strip()
-
-    if not skill_name:
-        return
-
-    replied_message = message.reply_to_message
 
     with db.connect() as conn:
 
@@ -171,48 +210,60 @@ async def combat_reply(
         WHERE chat_id = ?
         AND message_id = ?
         AND status = 'active'
-        ORDER BY id DESC
-        LIMIT 1
         """, (
             message.chat_id,
-            replied_message.message_id
+            message.reply_to_message.message_id
         )).fetchone()
 
     if not match:
         return
 
-    if user.id not in (
+    attacker_id = user.id
+
+    if attacker_id not in (
         match["player1"],
         match["player2"]
     ):
         return
 
-    opponent_id = (
+    defender_id = (
         match["player2"]
-        if user.id == match["player1"]
+        if attacker_id == match["player1"]
         else match["player1"]
     )
 
-    result = combat.use_skill(
-        user.id,
-        opponent_id,
+    if is_player_dead(attacker_id):
+        await message.reply_text(
+            "تو در وضعیت DEAD هستی و نمی‌تونی حمله کنی."
+        )
+        return
+
+    if is_player_dead(defender_id):
+        return
+
+    skill_name = message.text.strip()
+
+    if len(skill_name) > 60:
+        return
+
+    success, result = combat.use_skill(
+        attacker_id,
+        defender_id,
         skill_name
     )
 
-    success, data = result
-
     if not success:
-
-        await message.reply_text(
-            f"❌ {data}"
-        )
-
+        await message.reply_text(str(result))
         return
 
-    attacker = db.get_player(user.id)
-    defender = db.get_player(opponent_id)
+    damage = result["damage"]
+    defender_hp = result["hp"]
+    attacker_mp = result["mp"]
 
-    if data["defeated"]:
+    attacker = get_player(attacker_id)
+    defender = get_player(defender_id)
+
+    if result["defeated"]:
 
         with db.connect() as conn:
 
@@ -220,26 +271,33 @@ async def combat_reply(
             UPDATE pvp_matches
             SET status = 'finished'
             WHERE id = ?
+            AND status = 'active'
             """, (match["id"],))
+
+        lifecycle.finish_pvp(
+            winner_id=attacker_id,
+            loser_id=defender_id
+        )
 
         await message.reply_text(
             "🏆 PVP FINISHED!\n\n"
-            f"⚔️ Skill: {data['skill']}\n"
-            f"💥 Damage: {data['damage']}\n\n"
-            f"👑 Winner: {attacker['name']}\n"
-            f"💀 Defeated: {defender['name']}\n\n"
-            "سیستم امتیازدهی و احیای PvP در مرحله بعد تکمیل می‌شه."
+            f"👑 برنده: {attacker['name']}\n"
+            f"💀 بازنده: {defender['name']}\n\n"
+            f"⚔️ Damage: {damage}\n"
+            "☠️ وضعیت بازنده: DEAD\n"
+            "⏳ زمان احیا: ۵ دقیقه\n\n"
+            "امتیاز رنک بازیکن‌ها به‌روزرسانی شد."
         )
 
         return
 
     await message.reply_text(
-        "⚔️ ATTACK SUCCESSFUL!\n\n"
-        f"👤 Attacker: {attacker['name']}\n"
-        f"🔥 Skill: {data['skill']}\n"
-        f"💥 Damage: {data['damage']}\n\n"
-        f"❤️ Opponent HP: {data['defender_hp']}\n"
-        f"🔮 Attacker MP: {data['attacker_mp']}"
+        "⚔️ ATTACK RESULT\n\n"
+        f"👤 مهاجم: {attacker['name']}\n"
+        f"🎯 هدف: {defender['name']}\n\n"
+        f"💥 Damage: {damage}\n"
+        f"❤️ HP باقی‌مانده: {defender_hp}\n"
+        f"🔮 MP مهاجم: {attacker_mp}"
     )
 
 
@@ -250,6 +308,8 @@ async def combat_reply(
 def setup_pvp(application):
 
     init_pvp_db()
+
+    lifecycle.setup_lifecycle(application)
 
     application.add_handler(
         CommandHandler("duel", duel_command)

@@ -22,6 +22,8 @@ from progression import (
     skills_text
 )
 
+from stats_ui import setup_stats
+
 
 # =====================================
 # MAIN MENU
@@ -47,10 +49,11 @@ def main_menu():
             InlineKeyboardButton("✨ Awakening", callback_data="awakening")
         ],
         [
-            InlineKeyboardButton("📜 Quests", callback_data="quests")
+            InlineKeyboardButton("📈 Upgrade Stats", callback_data="stats_menu"),
+            InlineKeyboardButton("⚔️ My Skills", callback_data="show_skills")
         ],
         [
-            InlineKeyboardButton("⚔️ My Skills", callback_data="show_skills")
+            InlineKeyboardButton("📜 Quests", callback_data="quests")
         ]
     ]
 
@@ -157,20 +160,11 @@ async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    unlocked = unlock_available_skills(user_id)
+    unlock_available_skills(user_id)
 
-    text = skills_text(user_id)
-
-    if unlocked:
-
-        text = "🎉 مهارت‌های جدید آزاد شدند:\n\n"
-
-        for skill in unlocked:
-            text += f"⚔️ {skill}\n"
-
-        text += "\n" + skills_text(user_id)
-
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        skills_text(user_id)
+    )
 
 
 # =====================================
@@ -182,7 +176,6 @@ async def home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
     if query.message.chat.type != "private":
-
         await query.answer()
         return
 
@@ -207,7 +200,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
 
     if query.message.chat.type != "private":
-
         await query.answer()
         return
 
@@ -224,9 +216,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    # =================================
     # PROFILE
-    # =================================
 
     if action == "profile":
 
@@ -248,9 +238,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # STATUS
-    # =================================
 
     elif action == "status":
 
@@ -270,6 +258,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
+                        "📈 Upgrade Stats",
+                        callback_data="stats_menu"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         "🔙 Back",
                         callback_data="home"
                     )
@@ -277,9 +271,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # BATTLE
-    # =================================
 
     elif action == "battle":
 
@@ -289,9 +281,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=battle_menu()
         )
 
-    # =================================
     # TRAINING
-    # =================================
 
     elif action == "training":
 
@@ -308,9 +298,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # INVENTORY
-    # =================================
 
     elif action == "inventory":
 
@@ -343,9 +331,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # SHADOWS
-    # =================================
 
     elif action == "shadows":
 
@@ -381,9 +367,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # SHOP
-    # =================================
 
     elif action == "shop":
 
@@ -400,9 +384,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # DUNGEON
-    # =================================
 
     elif action == "dungeon":
 
@@ -419,9 +401,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # RANKED MATCH
-    # =================================
 
     elif action == "rank":
 
@@ -438,9 +418,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # QUESTS
-    # =================================
 
     elif action == "quests":
 
@@ -457,9 +435,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-    # =================================
     # SKILLS
-    # =================================
 
     elif action == "show_skills":
 
@@ -495,6 +471,9 @@ def main():
 
     # Awakening system
     setup_awakening(app)
+
+    # Stats upgrade system
+    setup_stats(app)
 
     # Commands
     app.add_handler(CommandHandler("start", start))

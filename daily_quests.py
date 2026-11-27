@@ -1,12 +1,12 @@
 import logging
+import random
 from datetime import datetime, timezone
 
 from telegram import (
-    Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
+    Update
 )
-
 from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
@@ -19,124 +19,227 @@ import database as db
 logger = logging.getLogger(__name__)
 
 
-# ================= DAILY QUESTS =================
+# ==================================================
+# SETTINGS
+# ==================================================
 
-DAILY_QUESTS = {
-    "ranked_win": {
-        "name": "🏆 Ranked Victory",
-        "description": "Win 1 Ranked Match",
+QUESTS_PER_DAY = 3
+
+DAILY_QUESTS = [
+    {
+        "id": "training",
+        "name": "تمرین روزانه",
+        "description": "یک بار تمرین انجام بده.",
         "target": 1,
-        "exp": 150,
-        "gold": 300,
+        "gold": 100,
         "crystals": 5
     },
-    "training": {
-        "name": "⚔️ Training",
-        "description": "Complete 3 Training Sessions",
-        "target": 3,
-        "exp": 100,
-        "gold": 200,
-        "crystals": 0
-    },
-    "dungeon": {
-        "name": "🏰 Dungeon Hunter",
-        "description": "Clear 1 Dungeon",
+    {
+        "id": "dungeon",
+        "name": "شکار سیاه‌چال",
+        "description": "یک سیاه‌چال را کامل کن.",
         "target": 1,
-        "exp": 200,
-        "gold": 400,
+        "gold": 200,
         "crystals": 10
+    },
+    {
+        "id": "monster",
+        "name": "شکار هیولا",
+        "description": "یک هیولا را شکست بده.",
+        "target": 1,
+        "gold": 150,
+        "crystals": 5
+    },
+    {
+        "id": "pvp",
+        "name": "مبارز روزانه",
+        "description": "یک مسابقه PvP را کامل کن.",
+        "target": 1,
+        "gold": 200,
+        "crystals": 10
+    },
+    {
+        "id": "boss",
+        "name": "شکارچی باس",
+        "description": "به یک باس آسیب وارد کن.",
+        "target": 1,
+        "gold": 250,
+        "crystals": 15
     }
-}
+]
 
 
-# ================= DATE =================
-
-def today():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-# ================= DATABASE =================
+# ==================================================
+# DATABASE
+# ==================================================
 
 def init_daily_quests_db():
+
     with db.connect() as conn:
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_quest_progress (
                 user_id INTEGER NOT NULL,
-                quest_id TEXT NOT NULL,
                 quest_date TEXT NOT NULL,
+                quest_id TEXT NOT NULL,
                 progress INTEGER DEFAULT 0,
                 completed INTEGER DEFAULT 0,
                 claimed INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, quest_id, quest_date)
+                PRIMARY KEY (user_id, quest_date, quest_id)
             )
         """)
 
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS
+            idx_daily_quest_user_date
+            ON daily_quest_progress(user_id, quest_date)
+        """)
 
-def ensure_daily_quests(user_id):
-    current_date = today()
+
+# ==================================================
+# DATE
+# ==================================================
+
+def today_date():
+
+    return datetime.now(
+        timezone.utc
+    ).date().isoformat()
+
+
+# ==================================================
+# DAILY QUEST GENERATION
+# ==================================================
+
+def generate_daily_quests(user_id):
+
+    today = today_date()
 
     with db.connect() as conn:
-        for quest_id in DAILY_QUESTS:
-            conn.execute("""
-                INSERT OR IGNORE INTO daily_quest_progress (
-                    user_id,
-                    quest_id,
-                    quest_date
-                )
-                VALUES (?, ?, ?)
-            """, (
-                user_id,
-                quest_id,
-                current_date
-            ))
 
-
-def get_daily_progress(user_id):
-    ensure_daily_quests(user_id)
-
-    with db.connect() as conn:
-        rows = conn.execute("""
-            SELECT *
+        existing = conn.execute("""
+            SELECT quest_id
             FROM daily_quest_progress
             WHERE user_id = ?
             AND quest_date = ?
-            ORDER BY quest_id
-        """, (
-            user_id,
-            today()
-        )).fetchall()
+        """, (user_id, today)).fetchall()
 
-    return rows
+        if existing:
+            return
+
+        selected = random.sample(
+            DAILY_QUESTS,
+            min(QUESTS_PER_DAY, len(DAILY_QUESTS))
+        )
+
+        for quest in selected:
+
+            conn.execute("""
+                INSERT OR IGNORE INTO daily_quest_progress
+                (
+                    user_id,
+                    quest_date,
+                    quest_id,
+                    progress,
+                    completed,
+                    claimed
+                )
+                VALUES (?, ?, ?, 0, 0, 0)
+            """, (
+                user_id,
+                today,
+                quest["id"]
+            ))
 
 
-# ================= QUEST PROGRESS =================
+# ==================================================
+# GET QUEST DATA
+# ==================================================
 
-def add_quest_progress(user_id, quest_id, amount=1):
-    if quest_id not in DAILY_QUESTS or amount <= 0:
-        return False
+def get_daily_quests(user_id):
 
-    ensure_daily_quests(user_id)
+    generate_daily_quests(user_id)
 
-    quest = DAILY_QUESTS[quest_id]
-    current_date = today()
+    today = today_date()
 
     with db.connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+
+        rows = conn.execute("""
+            SELECT quest_id, progress, completed, claimed
+            FROM daily_quest_progress
+            WHERE user_id = ?
+            AND quest_date = ?
+        """, (user_id, today)).fetchall()
+
+    result = []
+
+    for row in rows:
+
+        quest = next(
+            (
+                item for item in DAILY_QUESTS
+                if item["id"] == row["quest_id"]
+            ),
+            None
+        )
+
+        if not quest:
+            continue
+
+        item = dict(quest)
+
+        item["progress"] = row["progress"]
+        item["completed"] = bool(row["completed"])
+        item["claimed"] = bool(row["claimed"])
+
+        result.append(item)
+
+    return result
+
+
+# ==================================================
+# ADD QUEST PROGRESS
+# ==================================================
+
+def add_quest_progress(user_id, quest_id, amount=1):
+
+    if amount <= 0:
+        return False
+
+    today = today_date()
+
+    quest = next(
+        (
+            item for item in DAILY_QUESTS
+            if item["id"] == quest_id
+        ),
+        None
+    )
+
+    if not quest:
+        return False
+
+    generate_daily_quests(user_id)
+
+    with db.connect() as conn:
 
         row = conn.execute("""
             SELECT progress, completed
             FROM daily_quest_progress
             WHERE user_id = ?
-            AND quest_id = ?
             AND quest_date = ?
+            AND quest_id = ?
         """, (
             user_id,
-            quest_id,
-            current_date
+            today,
+            quest_id
         )).fetchone()
 
-        if not row or row["completed"]:
+        if not row:
             return False
+
+        if row["completed"]:
+            return True
 
         new_progress = min(
             quest["target"],
@@ -152,93 +255,77 @@ def add_quest_progress(user_id, quest_id, amount=1):
             SET progress = ?,
                 completed = ?
             WHERE user_id = ?
-            AND quest_id = ?
             AND quest_date = ?
-            AND completed = 0
+            AND quest_id = ?
         """, (
             new_progress,
             completed,
             user_id,
-            quest_id,
-            current_date
+            today,
+            quest_id
         ))
 
-    return True
-
-
-# ================= CLAIM REWARD =================
+    return bool(completed)
+# ==================================================
+# CLAIM REWARD
+# ==================================================
 
 def claim_quest_reward(user_id, quest_id):
-    if quest_id not in DAILY_QUESTS:
-        return False, "Unknown quest."
 
-    quest = DAILY_QUESTS[quest_id]
-    current_date = today()
+    today = today_date()
+
+    quest = next(
+        (
+            item for item in DAILY_QUESTS
+            if item["id"] == quest_id
+        ),
+        None
+    )
+
+    if not quest:
+        return False, "مأموریت پیدا نشد."
 
     with db.connect() as conn:
+
         conn.execute("BEGIN IMMEDIATE")
 
         row = conn.execute("""
             SELECT completed, claimed
             FROM daily_quest_progress
             WHERE user_id = ?
-            AND quest_id = ?
             AND quest_date = ?
+            AND quest_id = ?
         """, (
             user_id,
-            quest_id,
-            current_date
+            today,
+            quest_id
         )).fetchone()
 
         if not row:
-            return False, "Quest not found."
+            return False, "مأموریت امروز پیدا نشد."
 
         if not row["completed"]:
-            return False, "Quest is not completed yet."
+            return False, "این مأموریت هنوز کامل نشده است."
 
         if row["claimed"]:
-            return False, "Reward already claimed."
+            return False, "جایزه این مأموریت قبلاً دریافت شده است."
 
-        columns = {
-            item["name"]
-            for item in conn.execute(
-                "PRAGMA table_info(players)"
-            ).fetchall()
-        }
-
-        if not {"gold", "crystals"}.issubset(columns):
-            return False, "Player reward columns are missing."
-
-        player = conn.execute("""
-            SELECT user_id
-            FROM players
-            WHERE user_id = ?
-        """, (user_id,)).fetchone()
-
-        if not player:
-            return False, "Player not found."
-
-        cursor = conn.execute("""
+        conn.execute("""
             UPDATE daily_quest_progress
             SET claimed = 1
             WHERE user_id = ?
-            AND quest_id = ?
             AND quest_date = ?
-            AND completed = 1
-            AND claimed = 0
+            AND quest_id = ?
         """, (
             user_id,
-            quest_id,
-            current_date
+            today,
+            quest_id
         ))
-
-        if cursor.rowcount != 1:
-            return False, "Reward already claimed."
 
         conn.execute("""
             UPDATE players
-            SET gold = COALESCE(gold, 0) + ?,
-                crystals = COALESCE(crystals, 0) + ?
+            SET gold = gold + ?,
+                crystals = crystals + ?
             WHERE user_id = ?
         """, (
             quest["gold"],
@@ -246,219 +333,193 @@ def claim_quest_reward(user_id, quest_id):
             user_id
         ))
 
-    # EXP is added after the reward transaction.
-    try:
-        from progression import add_xp
-        add_xp(user_id, quest["exp"])
-
-    except Exception:
-        logger.exception(
-            "Could not add daily quest EXP for user %s",
-            user_id
-        )
-
-        return True, (
-            "🎁 Gold and Crystals claimed!\n"
-            "⚠️ EXP could not be added automatically. "
-            "Administrator review is required.\n\n"
-            f"Gold: {quest['gold']}\n"
-            f"Crystals: {quest['crystals']}"
-        )
-
     return True, (
-        "🎁 Reward claimed!\n\n"
-        f"EXP: {quest['exp']}\n"
-        f"Gold: {quest['gold']}\n"
-        f"Crystals: {quest['crystals']}"
-    )
-# ================= QUEST PAGE =================
-
-def quest_page(user_id):
-    rows = get_daily_progress(user_id)
-
-    text = (
-        "📜 DAILY QUESTS\n\n"
-        f"Date: {today()} UTC\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"🎁 جایزه دریافت شد!\n"
+        f"🪙 طلا: {quest['gold']}\n"
+        f"💎 کریستال: {quest['crystals']}"
     )
 
-    buttons = []
 
-    for row in rows:
-        quest_id = row["quest_id"]
-        quest = DAILY_QUESTS[quest_id]
+# ==================================================
+# QUEST PAGE
+# ==================================================
 
-        if row["claimed"]:
-            status = "✅ CLAIMED"
+def quest_text(user_id):
 
-        elif row["completed"]:
-            status = "🎁 REWARD AVAILABLE"
+    quests = get_daily_quests(user_id)
 
-            buttons.append([
+    lines = [
+        "📜 DAILY QUESTS",
+        "",
+        "مأموریت‌های روزانه تو:",
+        ""
+    ]
+
+    for index, quest in enumerate(quests, start=1):
+
+        if quest["claimed"]:
+            status = "✅ جایزه دریافت شده"
+
+        elif quest["completed"]:
+            status = "🎁 آماده دریافت جایزه"
+
+        else:
+            status = (
+                f"⏳ پیشرفت: "
+                f"{quest['progress']}/{quest['target']}"
+            )
+
+        lines.extend([
+            f"{index}. {quest['name']}",
+            quest["description"],
+            status,
+            f"🪙 {quest['gold']} طلا | "
+            f"💎 {quest['crystals']} کریستال",
+            ""
+        ])
+
+    return "\n".join(lines)
+
+
+# ==================================================
+# KEYBOARD
+# ==================================================
+
+def quest_keyboard(user_id):
+
+    quests = get_daily_quests(user_id)
+
+    keyboard = []
+
+    for quest in quests:
+
+        if quest["completed"] and not quest["claimed"]:
+
+            keyboard.append([
                 InlineKeyboardButton(
-                    f"🎁 Claim {quest['name']}",
+                    f"🎁 دریافت: {quest['name']}",
                     callback_data=(
-                        f"claim_daily_{quest_id}_{user_id}"
+                        f"quest_claim_{quest['id']}"
                     )
                 )
             ])
 
-        else:
-            status = "⏳ IN PROGRESS"
-
-        text += (
-            f"{quest['name']}\n"
-            f"{quest['description']}\n"
-            f"Progress: {row['progress']}/{quest['target']}\n"
-            f"Status: {status}\n"
-            f"Reward: {quest['exp']} EXP | "
-            f"{quest['gold']} Gold | "
-            f"{quest['crystals']} Crystals\n\n"
-        )
-
-    text += (
-        "━━━━━━━━━━━━━━━━━━\n"
-        "Complete quests and claim your rewards!"
-    )
-
-    buttons.append([
+    keyboard.append([
         InlineKeyboardButton(
             "🔄 Refresh",
             callback_data=f"daily_refresh_{user_id}"
         )
     ])
 
-    buttons.append([
+    keyboard.append([
         InlineKeyboardButton(
-            "🔙 Back",
+            "🏠 Back",
             callback_data="home"
         )
     ])
 
-    return text, InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(keyboard)
 
 
-# ================= COMMAND =================
+# ==================================================
+# COMMAND
+# ==================================================
 
-async def daily_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    user = update.effective_user
+async def daily_command(update, context):
 
     if update.effective_chat.type != "private":
+
         await update.effective_message.reply_text(
-            "Use this command in the bot's private chat."
+            "مأموریت‌های روزانه فقط در چت خصوصی قابل مشاهده هستند."
         )
+
         return
 
-    if not db.get_player(user.id):
-        await update.effective_message.reply_text(
-            "First register using /start."
-        )
-        return
+    user_id = update.effective_user.id
 
-    text, keyboard = quest_page(user.id)
+    if not db.get_player(user_id):
+
+        await update.effective_message.reply_text(
+            "ابتدا دستور /start را اجرا کن."
+        )
+
+        return
 
     await update.effective_message.reply_text(
-        text,
-        reply_markup=keyboard
+        quest_text(user_id),
+        reply_markup=quest_keyboard(user_id)
     )
 
 
-# ================= CALLBACK =================
+# ==================================================
+# CALLBACK
+# ==================================================
 
-async def daily_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def daily_callback(update, context):
+
     query = update.callback_query
 
-    if not query.message or query.message.chat.type != "private":
+    if not query.message:
+        await query.answer()
+        return
+
+    if query.message.chat.type != "private":
+
         await query.answer(
-            "Private chat only.",
+            "این بخش فقط در چت خصوصی قابل استفاده است.",
             show_alert=True
         )
+
         return
 
     user_id = query.from_user.id
     data = query.data
 
-    if not db.get_player(user_id):
-        await query.answer(
-            "Register using /start first.",
-            show_alert=True
-        )
-        return
+    if data == f"daily_refresh_{user_id}":
 
-    try:
-        if data.startswith("claim_daily_"):
-            parts = data.split("_")
-
-            quest_id = "_".join(parts[2:-1])
-            owner_id = int(parts[-1])
-
-            if owner_id != user_id:
-                await query.answer(
-                    "This menu does not belong to you.",
-                    show_alert=True
-                )
-                return
-
-            success, message = claim_quest_reward(
-                user_id,
-                quest_id
-            )
-
-            await query.answer(
-                "Reward claimed!" if success else message,
-                show_alert=not success
-            )
-
-        elif data.startswith("daily_refresh_"):
-            owner_id = int(data.rsplit("_", 1)[1])
-
-            if owner_id != user_id:
-                await query.answer(
-                    "This menu does not belong to you.",
-                    show_alert=True
-                )
-                return
-
-            await query.answer("Updated!")
-
-        else:
-            await query.answer(
-                "Invalid request.",
-                show_alert=True
-            )
-            return
-
-        text, keyboard = quest_page(user_id)
+        await query.answer("به‌روزرسانی شد.")
 
         await query.edit_message_text(
-            text,
-            reply_markup=keyboard
+            quest_text(user_id),
+            reply_markup=quest_keyboard(user_id)
         )
 
-    except Exception:
-        logger.exception(
-            "Daily quest callback failed for user %s",
-            user_id
+        return
+
+    if data.startswith("quest_claim_"):
+
+        quest_id = data.replace(
+            "quest_claim_",
+            "",
+            1
         )
 
-        try:
-            await query.answer(
-                "An error occurred. Please try again.",
-                show_alert=True
-            )
-        except Exception:
-            pass
+        success, message = claim_quest_reward(
+            user_id,
+            quest_id
+        )
+
+        await query.answer(
+            message,
+            show_alert=True
+        )
+
+        await query.edit_message_text(
+            quest_text(user_id),
+            reply_markup=quest_keyboard(user_id)
+        )
+
+        return
+
+    await query.answer()
 
 
-# ================= SETUP =================
+# ==================================================
+# SETUP
+# ==================================================
 
 def setup_daily_quests(application):
+
     init_daily_quests_db()
 
     application.add_handler(
@@ -471,6 +532,6 @@ def setup_daily_quests(application):
     application.add_handler(
         CallbackQueryHandler(
             daily_callback,
-            pattern=r"^(daily_refresh_\d+|claim_daily_[a-zA-Z0-9_]+_\d+)$"
+            pattern=r"^(daily_refresh_\d+|quest_claim_[a-z_]+)$"
         )
     )

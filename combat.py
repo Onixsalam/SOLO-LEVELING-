@@ -1,12 +1,16 @@
 import time
 import random
+import logging
 
 import database as db
 
 
-# ==================================================
+logger = logging.getLogger(__name__)
+
+
+# =====================================
 # COMBAT DATABASE
-# ==================================================
+# =====================================
 
 def init_combat_db():
 
@@ -17,9 +21,7 @@ def init_combat_db():
                 user_id INTEGER NOT NULL,
                 skill_name TEXT NOT NULL,
                 last_used REAL NOT NULL,
-
                 PRIMARY KEY (user_id, skill_name),
-
                 FOREIGN KEY (user_id)
                     REFERENCES players(user_id)
                     ON DELETE CASCADE
@@ -29,31 +31,55 @@ def init_combat_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS combat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-
                 attacker_id INTEGER NOT NULL,
                 defender_id INTEGER NOT NULL,
-
                 skill_name TEXT NOT NULL,
                 damage INTEGER NOT NULL,
-
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at INTEGER NOT NULL
             )
         """)
 
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_combat_attacker
+            CREATE INDEX IF NOT EXISTS
+            idx_combat_attacker
             ON combat_history(attacker_id)
         """)
 
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_combat_defender
+            CREATE INDEX IF NOT EXISTS
+            idx_combat_defender
             ON combat_history(defender_id)
         """)
 
 
-# ==================================================
+# =====================================
+# RESULT HELPERS
+# =====================================
+
+def success_result(**kwargs):
+
+    result = {
+        "success": True,
+        "message": "حمله با موفقیت انجام شد."
+    }
+
+    result.update(kwargs)
+
+    return result
+
+
+def error_result(message):
+
+    return {
+        "success": False,
+        "message": message,
+        "damage": 0
+    }
+
+
+# =====================================
 # GET SKILL
-# ==================================================
+# =====================================
 
 def get_skill(user_id, skill_name):
 
@@ -66,16 +92,17 @@ def get_skill(user_id, skill_name):
             SELECT *
             FROM player_skills
             WHERE user_id = ?
-              AND LOWER(skill_name) = LOWER(?)
+            AND LOWER(skill_name) = LOWER(?)
+            LIMIT 1
         """, (
             user_id,
             skill_name.strip()
         )).fetchone()
 
 
-# ==================================================
+# =====================================
 # COOLDOWN
-# ==================================================
+# =====================================
 
 def check_cooldown(user_id, skill_name, cooldown):
 
@@ -85,7 +112,7 @@ def check_cooldown(user_id, skill_name, cooldown):
             SELECT last_used
             FROM combat_cooldowns
             WHERE user_id = ?
-              AND skill_name = ?
+            AND LOWER(skill_name) = LOWER(?)
         """, (
             user_id,
             skill_name
@@ -94,9 +121,8 @@ def check_cooldown(user_id, skill_name, cooldown):
     if not row:
         return True, 0
 
-    remaining = max(
-        0,
-        int(cooldown) - (time.time() - row["last_used"])
+    remaining = cooldown - (
+        time.time() - row["last_used"]
     )
 
     if remaining > 0:
@@ -127,36 +153,23 @@ def set_cooldown(user_id, skill_name):
         ))
 
 
-# ==================================================
-# STAT HELPERS
-# ==================================================
+# =====================================
+# PLAYER STATS
+# =====================================
 
 def get_stat(player, upper_name, lower_name):
 
-    try:
-        value = player[upper_name]
+    value = player[upper_name]
 
-        if value is not None:
-            return max(0, int(value))
-
-    except (KeyError, IndexError, TypeError):
-        pass
-
-    try:
+    if value is None:
         value = player[lower_name]
 
-        if value is not None:
-            return max(0, int(value))
-
-    except (KeyError, IndexError, TypeError):
-        pass
-
-    return 5
+    return max(0, int(value or 0))
 
 
-# ==================================================
-# DEFENSE CALCULATION
-# ==================================================
+# =====================================
+# DEFENSE
+# =====================================
 
 def calculate_defense(player):
 
@@ -179,17 +192,17 @@ def calculate_defense(player):
     )
 
     defense = (
-        vitality * 2 +
-        agility +
-        sense
+        vitality * 2
+        + agility
+        + sense
     )
 
     return max(0, defense)
 
 
-# ==================================================
-# DAMAGE CALCULATION
-# ==================================================
+# =====================================
+# DAMAGE
+# =====================================
 
 def calculate_damage(attacker, defender, skill):
 
@@ -217,9 +230,9 @@ def calculate_damage(attacker, defender, skill):
     )
 
     attack_power = (
-        strength * 2 +
-        intelligence * 2 +
-        agility
+        strength * 2
+        + intelligence * 2
+        + agility
     )
 
     defense = calculate_defense(defender)
@@ -243,225 +256,249 @@ def calculate_damage(attacker, defender, skill):
     )
 
 
-# ==================================================
+# =====================================
 # USE SKILL
-# ==================================================
+# =====================================
 
-def use_skill(attacker_id, defender_id, skill_name):
+def use_skill(
+    attacker_id,
+    defender_id,
+    skill_name
+):
 
     if attacker_id == defender_id:
-        return False, "نمی‌تونی به خودت حمله کنی."
+
+        return error_result(
+            "نمی‌توانی به خودت حمله کنی."
+        )
 
     if not skill_name or len(skill_name) > 60:
-        return False, "نام مهارت معتبر نیست."
+
+        return error_result(
+            "نام مهارت معتبر نیست."
+        )
 
     skill_name = skill_name.strip()
 
     if not skill_name:
-        return False, "نام مهارت معتبر نیست."
 
-    with db.connect() as conn:
-
-        # جلوگیری از اجرای هم‌زمان حملات
-        conn.execute("BEGIN IMMEDIATE")
-
-        attacker = conn.execute("""
-            SELECT *
-            FROM players
-            WHERE user_id = ?
-        """, (attacker_id,)).fetchone()
-
-        defender = conn.execute("""
-            SELECT *
-            FROM players
-            WHERE user_id = ?
-        """, (defender_id,)).fetchone()
-
-        if not attacker or not defender:
-            return False, "یکی از بازیکنان پیدا نشد."
-
-        # بررسی وضعیت مهاجم
-        if attacker["is_dead"]:
-            return False, "بازیکن مهاجم در وضعیت مرگ قرار داره."
-
-        # بررسی وضعیت مدافع
-        if defender["is_dead"]:
-            return False, "این بازیکن در وضعیت مرگ قرار داره."
-
-        if attacker["hp"] <= 0 or defender["hp"] <= 0:
-            return False, "یکی از بازیکنان توان ادامه مبارزه رو نداره."
-
-        # بررسی مهارت آزادشده
-        skill = conn.execute("""
-            SELECT *
-            FROM player_skills
-            WHERE user_id = ?
-              AND LOWER(skill_name) = LOWER(?)
-        """, (
-            attacker_id,
-            skill_name
-        )).fetchone()
-
-        if not skill:
-            return False, "این مهارت رو آزاد نکردی."
-
-        if skill["skill_type"] not in ("attack", "special"):
-            return False, "این مهارت برای حمله نیست."
-
-        mp_cost = max(
-            0,
-            int(skill["mp_cost"] or 0)
+        return error_result(
+            "نام مهارت معتبر نیست."
         )
 
-        cooldown = max(
-            0,
-            int(skill["cooldown"] or 0)
-        )
+    try:
 
-        if attacker["mp"] < mp_cost:
-            return False, "MP کافی نداری."
+        with db.connect() as conn:
 
-        # بررسی کول‌داون
-        cooldown_row = conn.execute("""
-            SELECT last_used
-            FROM combat_cooldowns
-            WHERE user_id = ?
-              AND skill_name = ?
-        """, (
-            attacker_id,
-            skill["skill_name"]
-        )).fetchone()
+            conn.execute("BEGIN IMMEDIATE")
 
-        current_time = time.time()
+            attacker = conn.execute("""
+                SELECT *
+                FROM players
+                WHERE user_id = ?
+            """, (attacker_id,)).fetchone()
 
-        if cooldown_row:
+            defender = conn.execute("""
+                SELECT *
+                FROM players
+                WHERE user_id = ?
+            """, (defender_id,)).fetchone()
 
-            remaining = cooldown - (
-                current_time - cooldown_row["last_used"]
-            )
+            if not attacker or not defender:
 
-            if remaining > 0:
-
-                return False, (
-                    f"این مهارت تا "
-                    f"{int(remaining) + 1} ثانیه دیگه "
-                    f"آماده نمی‌شه."
+                return error_result(
+                    "یکی از بازیکنان پیدا نشد."
                 )
 
-        # ادامه محاسبات در قسمت دوم
-        # ==========================================
-        # DAMAGE
-        # ==========================================
+            if attacker["is_dead"] or attacker["hp"] <= 0:
 
-        damage = calculate_damage(
-            attacker,
-            defender,
-            skill
-        )
+                return error_result(
+                    "شخصیت مهاجم در وضعیت مرگ قرار دارد."
+                )
 
-        new_hp = max(
-            0,
-            defender["hp"] - damage
-        )
+            if defender["is_dead"] or defender["hp"] <= 0:
 
-        new_mp = max(
-            0,
-            attacker["mp"] - mp_cost
-        )
+                return error_result(
+                    "این بازیکن توان ادامه مبارزه را ندارد."
+                )
 
-        # ==========================================
-        # UPDATE ATTACKER MP
-        # ==========================================
+            # فقط مهارت متعلق به مهاجم قابل استفاده است.
+            skill = conn.execute("""
+                SELECT *
+                FROM player_skills
+                WHERE user_id = ?
+                AND LOWER(skill_name) = LOWER(?)
+                LIMIT 1
+            """, (
+                attacker_id,
+                skill_name
+            )).fetchone()
 
-        conn.execute("""
-            UPDATE players
-            SET mp = ?
-            WHERE user_id = ?
-        """, (
-            new_mp,
-            attacker_id
-        ))
+            if not skill:
 
-        # ==========================================
-        # UPDATE DEFENDER HP
-        # ==========================================
+                return error_result(
+                    "این مهارت را آزاد نکرده‌ای."
+                )
 
-        conn.execute("""
-            UPDATE players
-            SET hp = ?
-            WHERE user_id = ?
-        """, (
-            new_hp,
-            defender_id
-        ))
+            skill_type = (
+                skill["skill_type"] or ""
+            ).lower()
 
-        # ==========================================
-        # SAVE COOLDOWN
-        # ==========================================
+            if skill_type not in (
+                "attack",
+                "special"
+            ):
 
-        conn.execute("""
-            INSERT INTO combat_cooldowns (
-                user_id,
-                skill_name,
-                last_used
+                return error_result(
+                    "این مهارت برای حمله نیست."
+                )
+
+            mp_cost = max(
+                0,
+                int(skill["mp_cost"] or 0)
             )
-            VALUES (?, ?, ?)
 
-            ON CONFLICT(user_id, skill_name)
-            DO UPDATE SET
-                last_used = excluded.last_used
-        """, (
-            attacker_id,
-            skill["skill_name"],
-            current_time
-        ))
+            cooldown = max(
+                0,
+                int(skill["cooldown"] or 0)
+            )
 
-        # ==========================================
-        # COMBAT HISTORY
-        # ==========================================
+            if attacker["mp"] < mp_cost:
 
-        conn.execute("""
-            INSERT INTO combat_history (
+                return error_result(
+                    "MP کافی نداری."
+                )
+
+            # بررسی زمان استفاده قبلی
+            cooldown_row = conn.execute("""
+                SELECT last_used
+                FROM combat_cooldowns
+                WHERE user_id = ?
+                AND LOWER(skill_name) = LOWER(?)
+            """, (
+                attacker_id,
+                skill["skill_name"]
+            )).fetchone()
+
+            now = time.time()
+
+            if cooldown_row:
+
+                remaining = cooldown - (
+                    now - cooldown_row["last_used"]
+                )
+
+                if remaining > 0:
+
+                    return error_result(
+                        f"این مهارت تا "
+                        f"{int(remaining) + 1} ثانیه دیگر "
+                        f"آماده نمی‌شود."
+                    )
+
+            # محاسبه آسیب
+            damage = calculate_damage(
+                attacker,
+                defender,
+                skill
+            )
+
+            new_hp = max(
+                0,
+                defender["hp"] - damage
+            )
+
+            new_mp = max(
+                0,
+                attacker["mp"] - mp_cost
+            )
+
+            # ثبت کاهش مانا
+            conn.execute("""
+                UPDATE players
+                SET mp = ?
+                WHERE user_id = ?
+            """, (
+                new_mp,
+                attacker_id
+            ))
+
+            # ثبت کاهش سلامتی
+            conn.execute("""
+                UPDATE players
+                SET hp = ?
+                WHERE user_id = ?
+            """, (
+                new_hp,
+                defender_id
+            ))
+
+            # ثبت زمان استفاده مهارت
+            conn.execute("""
+                INSERT INTO combat_cooldowns (
+                    user_id,
+                    skill_name,
+                    last_used
+                )
+                VALUES (?, ?, ?)
+
+                ON CONFLICT(user_id, skill_name)
+                DO UPDATE SET
+                    last_used = excluded.last_used
+            """, (
+                attacker_id,
+                skill["skill_name"],
+                now
+            ))
+
+            # ثبت تاریخچه
+            conn.execute("""
+                INSERT INTO combat_history (
+                    attacker_id,
+                    defender_id,
+                    skill_name,
+                    damage,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+            """, (
                 attacker_id,
                 defender_id,
-                skill_name,
-                damage
+                skill["skill_name"],
+                damage,
+                int(now)
+            ))
+            # نتیجه نهایی
+            defeated = new_hp <= 0
+
+            return success_result(
+                attacker_id=attacker_id,
+                defender_id=defender_id,
+                skill=skill["skill_name"],
+                damage=damage,
+                hp=new_hp,
+                defender_hp=new_hp,
+                mp=new_mp,
+                attacker_mp=new_mp,
+                defeated=defeated
             )
-            VALUES (?, ?, ?, ?)
-        """, (
+
+    except Exception:
+
+        logger.exception(
+            "Combat error: attacker=%s defender=%s",
             attacker_id,
-            defender_id,
-            skill["skill_name"],
-            damage
-        ))
+            defender_id
+        )
 
-        # ==========================================
-        # RESULT
-        # ==========================================
-
-        result = {
-            "attacker_id": attacker_id,
-            "defender_id": defender_id,
-
-            "skill": skill["skill_name"],
-
-            "damage": damage,
-
-            "hp": new_hp,
-            "defender_hp": new_hp,
-
-            "mp": new_mp,
-            "attacker_mp": new_mp,
-
-            "defeated": new_hp <= 0
-        }
-
-    return True, result
+        return error_result(
+            "هنگام اجرای مبارزه خطایی رخ داد."
+        )
 
 
-# ==================================================
+# =====================================
 # COMBAT HISTORY
-# ==================================================
+# =====================================
 
 def get_combat_history(user_id, limit=10):
 
@@ -476,7 +513,7 @@ def get_combat_history(user_id, limit=10):
             SELECT *
             FROM combat_history
             WHERE attacker_id = ?
-               OR defender_id = ?
+            OR defender_id = ?
             ORDER BY id DESC
             LIMIT ?
         """, (
@@ -486,20 +523,29 @@ def get_combat_history(user_id, limit=10):
         )).fetchall()
 
 
-# ==================================================
-# HP AND MP RECOVERY
-# ==================================================
+# =====================================
+# RESTORE PLAYER
+# =====================================
 
 def restore_player(user_id):
 
     with db.connect() as conn:
 
-        cursor = conn.execute("""
+        player = conn.execute("""
+            SELECT max_hp, max_mp
+            FROM players
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+        if not player:
+            return False
+
+        conn.execute("""
             UPDATE players
-            SET
-                hp = max_hp,
-                mp = max_mp
+            SET hp = max_hp,
+                mp = max_mp,
+                is_dead = 0
             WHERE user_id = ?
         """, (user_id,))
 
-    return cursor.rowcount > 0
+    return True

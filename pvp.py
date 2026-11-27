@@ -18,9 +18,9 @@ import daily_quests
 logger = logging.getLogger(__name__)
 
 
-# =====================================
+# ==================================================
 # DATABASE
-# =====================================
+# ==================================================
 
 def init_pvp_db():
 
@@ -29,10 +29,13 @@ def init_pvp_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS pvp_matches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 chat_id INTEGER NOT NULL,
                 message_id INTEGER NOT NULL,
+
                 player1 INTEGER NOT NULL,
                 player2 INTEGER NOT NULL,
+
                 status TEXT DEFAULT 'active',
                 created_at REAL
             )
@@ -49,9 +52,9 @@ def init_pvp_db():
         """)
 
 
-# =====================================
+# ==================================================
 # PLAYER
-# =====================================
+# ==================================================
 
 def get_player(user_id):
 
@@ -80,9 +83,9 @@ def is_player_dead(user_id):
     return False
 
 
-# =====================================
+# ==================================================
 # ACTIVE MATCH CHECK
-# =====================================
+# ==================================================
 
 def player_has_active_match(user_id):
 
@@ -92,10 +95,10 @@ def player_has_active_match(user_id):
             SELECT id
             FROM pvp_matches
             WHERE status = 'active'
-            AND (
-                player1 = ?
-                OR player2 = ?
-            )
+              AND (
+                  player1 = ?
+                  OR player2 = ?
+              )
             LIMIT 1
         """, (
             user_id,
@@ -105,9 +108,9 @@ def player_has_active_match(user_id):
     return row is not None
 
 
-# =====================================
+# ==================================================
 # CREATE FRIENDLY DUEL
-# =====================================
+# ==================================================
 
 async def duel_command(
     update: Update,
@@ -138,7 +141,11 @@ async def duel_command(
 
     opponent = message.reply_to_message.from_user
 
-    if not opponent or opponent.is_bot or opponent.id == user.id:
+    if (
+        not opponent
+        or opponent.is_bot
+        or opponent.id == user.id
+    ):
 
         await message.reply_text(
             "این حریف قابل انتخاب نیست."
@@ -197,10 +204,10 @@ async def duel_command(
                 SELECT id
                 FROM pvp_matches
                 WHERE status = 'active'
-                AND (
-                    player1 IN (?, ?)
-                    OR player2 IN (?, ?)
-                )
+                  AND (
+                      player1 IN (?, ?)
+                      OR player2 IN (?, ?)
+                  )
                 LIMIT 1
             """, (
                 user.id,
@@ -211,11 +218,9 @@ async def duel_command(
 
             if active:
 
-                await message.reply_text(
+                raise ValueError(
                     "یکی از بازیکن‌ها وارد مبارزه دیگری شده."
                 )
-
-                return
 
             conn.execute("""
                 INSERT INTO pvp_matches (
@@ -235,18 +240,33 @@ async def duel_command(
                 time.time()
             ))
 
+    except ValueError as error:
+
+        try:
+            await battle_message.edit_text(
+                "❌ مبارزه ساخته نشد.\n"
+                f"{error}"
+            )
+        except Exception:
+            pass
+
     except Exception:
 
-        logger.exception("Failed to create friendly PVP.")
-
-        await message.reply_text(
-            "ساخت مبارزه با خطا مواجه شد. دوباره تلاش کن."
+        logger.exception(
+            "Failed to create friendly PVP."
         )
 
+        try:
+            await battle_message.edit_text(
+                "ساخت مبارزه با خطا مواجه شد. دوباره تلاش کن."
+            )
+        except Exception:
+            pass
 
-# =====================================
-# FRIENDLY DEATH
-# =====================================
+
+# ==================================================
+# FINISH FRIENDLY MATCH
+# ==================================================
 
 def finish_friendly_pvp(
     winner_id,
@@ -258,12 +278,11 @@ def finish_friendly_pvp(
 
         conn.execute("BEGIN IMMEDIATE")
 
-        # فقط یک‌بار نتیجه ثبت شود
         updated = conn.execute("""
             UPDATE pvp_matches
             SET status = 'finished'
             WHERE id = ?
-            AND status = 'active'
+              AND status = 'active'
         """, (match_id,))
 
         if updated.rowcount != 1:
@@ -277,7 +296,8 @@ def finish_friendly_pvp(
 
         conn.execute("""
             UPDATE players
-            SET losses = losses + 1,
+            SET
+                losses = losses + 1,
                 deaths = deaths + 1,
                 hp = 0,
                 is_dead = 1
@@ -302,9 +322,9 @@ def finish_friendly_pvp(
     return True
 
 
-# =====================================
-# RANKED MATCH FINISH
-# =====================================
+# ==================================================
+# FINISH RANKED MATCH
+# ==================================================
 
 def finish_ranked_match(match_id):
 
@@ -312,27 +332,17 @@ def finish_ranked_match(match_id):
 
         conn.execute("BEGIN IMMEDIATE")
 
-        match = conn.execute("""
-            SELECT id
-            FROM ranked_matches
-            WHERE id = ?
-            AND status = 'active'
-        """, (match_id,)).fetchone()
-
-        if not match:
-            return False
-
         updated = conn.execute("""
             UPDATE ranked_matches
             SET status = 'finished'
             WHERE id = ?
-            AND status = 'active'
+              AND status = 'active'
         """, (match_id,))
 
-        return updated.rowcount == 1
-# =====================================
+    return updated.rowcount == 1
+# ==================================================
 # COMBAT REPLY
-# =====================================
+# ==================================================
 
 async def combat_reply(
     update: Update,
@@ -354,15 +364,18 @@ async def combat_reply(
     if message.chat.type not in ("group", "supergroup"):
         return
 
-    # پیدا کردن مبارزه فعال
+    # ==============================================
+    # FIND MATCH
+    # ==============================================
+
     with db.connect() as conn:
 
         match = conn.execute("""
             SELECT *
             FROM pvp_matches
             WHERE chat_id = ?
-            AND message_id = ?
-            AND status = 'active'
+              AND message_id = ?
+              AND status = 'active'
         """, (
             message.chat_id,
             message.reply_to_message.message_id
@@ -373,7 +386,7 @@ async def combat_reply(
 
     attacker_id = user.id
 
-    # فقط شرکت‌کننده‌ها اجازه حمله دارند
+    # فقط دو شرکت‌کننده اجازه حمله دارند
     if attacker_id not in (
         match["player1"],
         match["player2"]
@@ -389,7 +402,7 @@ async def combat_reply(
     if is_player_dead(attacker_id):
 
         await message.reply_text(
-            "تو در وضعیت DEAD هستی و نمی‌تونی حمله کنی."
+            "☠️ تو در وضعیت DEAD هستی و نمی‌تونی حمله کنی."
         )
 
         return
@@ -402,7 +415,10 @@ async def combat_reply(
     if not skill_name or len(skill_name) > 60:
         return
 
-    # اجرای مهارت
+    # ==============================================
+    # USE SKILL
+    # ==============================================
+
     success, result = combat.use_skill(
         attacker_id,
         defender_id,
@@ -415,8 +431,8 @@ async def combat_reply(
         return
 
     damage = result["damage"]
-    defender_hp = result["hp"]
-    attacker_mp = result["mp"]
+    defender_hp = result["defender_hp"]
+    attacker_mp = result["attacker_mp"]
 
     attacker = get_player(attacker_id)
     defender = get_player(defender_id)
@@ -424,13 +440,11 @@ async def combat_reply(
     if not attacker or not defender:
         return
 
-    # =================================
+    # ==============================================
     # MATCH FINISHED
-    # =================================
+    # ==============================================
 
     if result["defeated"]:
-
-        ranked_match = None
 
         with db.connect() as conn:
 
@@ -438,44 +452,56 @@ async def combat_reply(
                 SELECT id
                 FROM ranked_matches
                 WHERE battle_message_id = ?
-                AND battle_chat_id = ?
-                AND status = 'active'
+                  AND battle_chat_id = ?
+                  AND status = 'active'
             """, (
                 match["message_id"],
                 match["chat_id"]
             )).fetchone()
 
-        # =================================
+        # ==========================================
         # RANKED MATCH
-        # =================================
+        # ==========================================
 
         if ranked_match:
 
-            ranked_finished = finish_ranked_match(
-                ranked_match["id"]
-            )
-
-            if not ranked_finished:
-                return
-
-            # پایان مبارزه اصلی
-            with db.connect() as conn:
-
-                updated = conn.execute("""
-                    UPDATE pvp_matches
-                    SET status = 'finished'
-                    WHERE id = ?
-                    AND status = 'active'
-                """, (match["id"],))
-
-                if updated.rowcount != 1:
-                    return
+            ranked_id = ranked_match["id"]
 
             ranking_result = lifecycle.finish_pvp(
                 winner_id=attacker_id,
-                loser_id=defender_id
+                loser_id=defender_id,
+                match_id=ranked_id
             )
 
+            if not ranking_result:
+
+                logger.warning(
+                    "Ranked result was already processed or failed. "
+                    "Match ID: %s",
+                    ranked_id
+                )
+
+                return
+
+            with db.connect() as conn:
+
+                conn.execute("BEGIN IMMEDIATE")
+
+                conn.execute("""
+                    UPDATE ranked_matches
+                    SET status = 'finished'
+                    WHERE id = ?
+                      AND status = 'active'
+                """, (ranked_id,))
+
+                conn.execute("""
+                    UPDATE pvp_matches
+                    SET status = 'finished'
+                    WHERE id = ?
+                      AND status = 'active'
+                """, (match["id"],))
+
+            # Daily quest
             try:
 
                 daily_quests.add_quest_progress(
@@ -490,52 +516,43 @@ async def combat_reply(
                     "Failed to update ranked daily quest."
                 )
 
-            if ranking_result:
+            winner_points = ranking_result.get(
+                "winner_points",
+                lifecycle.WIN_POINTS
+            )
 
-                winner_points = ranking_result.get(
-                    "winner_points",
-                    lifecycle.WIN_POINTS
+            loser_points = ranking_result.get(
+                "loser_points",
+                lifecycle.LOSE_POINTS
+            )
+
+            streak_bonus = ranking_result.get(
+                "streak_bonus",
+                0
+            )
+
+            protected = ranking_result.get(
+                "protected",
+                False
+            )
+
+            points_text = (
+                "🏆 RANKED MATCH\n\n"
+                f"📈 Winner: +{winner_points} RP\n"
+                f"📉 Loser: -{loser_points} RP\n"
+                f"🔥 Streak Bonus: +{streak_bonus} RP\n"
+            )
+
+            if protected:
+
+                points_text += (
+                    "🛡️ Rank Protection فعال شد؛ "
+                    "از کاهش امتیاز جلوگیری کرد.\n"
                 )
 
-                loser_points = ranking_result.get(
-                    "loser_points",
-                    lifecycle.LOSE_POINTS
-                )
-
-                streak_bonus = ranking_result.get(
-                    "streak_bonus",
-                    0
-                )
-
-                protected = ranking_result.get(
-                    "protected",
-                    False
-                )
-
-                points_text = (
-                    "🏆 RANKED MATCH\n\n"
-                    f"📈 Winner: +{winner_points} RP\n"
-                    f"📉 Loser: -{loser_points} RP\n"
-                    f"🔥 Streak Bonus: +{streak_bonus} RP\n"
-                )
-
-                if protected:
-
-                    points_text += (
-                        "🛡️ Rank Protection فعال شد؛ "
-                        "از کاهش امتیاز جلوگیری کرد.\n"
-                    )
-
-            else:
-
-                points_text = (
-                    "🏆 Ranked Match Finished\n"
-                    "نتیجه رنک ثبت نشد؛ نیاز به بررسی دارد."
-                )
-
-        # =================================
+        # ==========================================
         # FRIENDLY MATCH
-        # =================================
+        # ==========================================
 
         else:
 
@@ -549,13 +566,13 @@ async def combat_reply(
                 return
 
             points_text = (
-                "🤝 Friendly Match\n"
+                "🤝 FRIENDLY MATCH\n"
                 "امتیاز رنک تغییری نکرد."
             )
 
-        # =================================
+        # ==========================================
         # FINAL RESULT
-        # =================================
+        # ==========================================
 
         await message.reply_text(
             "🏆 MATCH FINISHED!\n\n"
@@ -569,23 +586,24 @@ async def combat_reply(
 
         return
 
-    # =================================
+    # ==============================================
     # ATTACK RESULT
-    # =================================
+    # ==============================================
 
     await message.reply_text(
         "⚔️ ATTACK RESULT\n\n"
         f"👤 Attacker: {attacker['name']}\n"
         f"🎯 Target: {defender['name']}\n\n"
+        f"🌀 Skill: {result['skill']}\n"
         f"💥 Damage: {damage}\n"
         f"❤️ Remaining HP: {defender_hp}\n"
         f"🔮 Attacker MP: {attacker_mp}"
     )
 
 
-# =====================================
+# ==================================================
 # SETUP
-# =====================================
+# ==================================================
 
 def setup_pvp(application):
 

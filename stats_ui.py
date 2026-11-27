@@ -1,116 +1,174 @@
-import database as db
+import logging
 
 from telegram import (
-    Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup
 )
+from telegram.ext import CallbackQueryHandler
 
-from telegram.ext import (
-    CallbackQueryHandler,
-    ContextTypes
-)
-
-from progression import upgrade_stat
+import database as db
+import progression
 
 
-# =====================================
-# STAT MENU
-# =====================================
+logger = logging.getLogger(__name__)
 
-def stats_keyboard():
+
+# ==================================================
+# KEYBOARD
+# ==================================================
+
+def stats_keyboard(user_id):
 
     keyboard = [
         [
-            InlineKeyboardButton("💪 STR +1", callback_data="stat_up_STR"),
-            InlineKeyboardButton("⚡ AGI +1", callback_data="stat_up_AGI")
+            InlineKeyboardButton(
+                "💪 STR +1",
+                callback_data="stat_up_STR"
+            ),
+            InlineKeyboardButton(
+                "⚡ AGI +1",
+                callback_data="stat_up_AGI"
+            )
         ],
         [
-            InlineKeyboardButton("🛡 VIT +1", callback_data="stat_up_VIT"),
-            InlineKeyboardButton("🧠 INT +1", callback_data="stat_up_INT")
+            InlineKeyboardButton(
+                "❤️ VIT +1",
+                callback_data="stat_up_VIT"
+            ),
+            InlineKeyboardButton(
+                "🔮 INT +1",
+                callback_data="stat_up_INT"
+            )
         ],
         [
-            InlineKeyboardButton("👁 SEN +1", callback_data="stat_up_SEN")
+            InlineKeyboardButton(
+                "👁 SEN +1",
+                callback_data="stat_up_SEN"
+            )
         ],
         [
-            InlineKeyboardButton("🔄 Refresh", callback_data="stats_menu")
-        ],
-        [
-            InlineKeyboardButton("🔙 Main Menu", callback_data="home")
+            InlineKeyboardButton(
+                "🔄 Refresh",
+                callback_data="stats_menu"
+            ),
+            InlineKeyboardButton(
+                "🏠 Back",
+                callback_data="home"
+            )
         ]
     ]
 
     return InlineKeyboardMarkup(keyboard)
 
 
-# =====================================
-# STAT TEXT
-# =====================================
+# ==================================================
+# STAT DISPLAY
+# ==================================================
 
 def get_stats_text(user_id):
 
     player = db.get_player(user_id)
 
     if not player:
-        return "بازیکن پیدا نشد."
+        return "❌ بازیکن پیدا نشد."
+
+    info = progression.get_progression_info(user_id)
+
+    if not info:
+        return "❌ اطلاعات ویژگی‌ها در دسترس نیست."
 
     return (
-        "📊 HUNTER STAT UPGRADE\n\n"
-        f"⭐ Level: {player['level']}\n"
-        f"📈 Available Points: {player['stat_points']}\n\n"
-        f"💪 STR: {player['STR']}\n"
-        f"⚡ AGI: {player['AGI']}\n"
-        f"🛡 VIT: {player['VIT']}\n"
-        f"🧠 INT: {player['INT']}\n"
-        f"👁 SEN: {player['SEN']}\n\n"
-        f"⚔ Power: {player['power']}\n\n"
-        "برای افزایش هر ویژگی، دکمه مربوط به آن را بزن."
+        "📊 STATUS UPGRADE\n\n"
+        f"⭐ Level: {info['level']}\n"
+        f"🔥 Power: {info['power']}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "📌 YOUR ATTRIBUTES\n\n"
+        f"💪 STR: {info['STR']}\n"
+        f"⚡ AGI: {info['AGI']}\n"
+        f"❤️ VIT: {info['VIT']}\n"
+        f"🔮 INT: {info['INT']}\n"
+        f"👁 SEN: {info['SEN']}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        f"🎯 Available Points: {info['stat_points']}\n\n"
+        "برای افزایش هر ویژگی، دکمه مربوطه را انتخاب کن."
     )
 
 
-# =====================================
-# CALLBACK
-# =====================================
+# ==================================================
+# SHOW STATS
+# ==================================================
 
-async def stats_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def show_stats(query, user_id):
+
+    await query.edit_message_text(
+        get_stats_text(user_id),
+        reply_markup=stats_keyboard(user_id)
+    )
+# ==================================================
+# CALLBACK
+# ==================================================
+
+async def stats_callback(update, context):
 
     query = update.callback_query
 
-    if query.message.chat.type != "private":
+    if not query.message:
         await query.answer()
         return
 
-    user_id = query.from_user.id
-    action = query.data
+    if query.message.chat.type != "private":
 
-    player = db.get_player(user_id)
-
-    if not player:
         await query.answer(
-            "اول دستور /start رو بزن.",
+            "این بخش فقط در چت خصوصی قابل استفاده است.",
             show_alert=True
         )
+
         return
 
+    user_id = query.from_user.id
+
+    if not db.get_player(user_id):
+
+        await query.answer(
+            "ابتدا دستور /start را اجرا کن.",
+            show_alert=True
+        )
+
+        return
+
+    action = query.data
+
+    # نمایش صفحه ویژگی‌ها
     if action == "stats_menu":
 
         await query.answer()
 
-        await query.edit_message_text(
-            get_stats_text(user_id),
-            reply_markup=stats_keyboard()
+        await show_stats(
+            query,
+            user_id
         )
 
         return
 
+    # ارتقای ویژگی
     if action.startswith("stat_up_"):
 
-        stat = action.replace("stat_up_", "")
+        stat = action.replace(
+            "stat_up_",
+            "",
+            1
+        ).upper()
 
-        success, message = upgrade_stat(
+        if stat not in progression.VALID_STATS:
+
+            await query.answer(
+                "ویژگی نامعتبر است.",
+                show_alert=True
+            )
+
+            return
+
+        success, message = progression.upgrade_stat(
             user_id,
             stat,
             1
@@ -121,25 +179,25 @@ async def stats_callback(
             show_alert=not success
         )
 
-        if success:
+        await show_stats(
+            query,
+            user_id
+        )
 
-            await query.edit_message_text(
-                "✅ STAT UPGRADED!\n\n"
-                f"{message}\n\n"
-                + get_stats_text(user_id),
-                reply_markup=stats_keyboard()
-            )
+        return
+
+    await query.answer()
 
 
-# =====================================
+# ==================================================
 # SETUP
-# =====================================
+# ==================================================
 
 def setup_stats(application):
 
     application.add_handler(
         CallbackQueryHandler(
             stats_callback,
-            pattern=r"^(stats_menu|stat_up_.*)$"
+            pattern=r"^(stats_menu|stat_up_(STR|AGI|VIT|INT|SEN))$"
         )
     )

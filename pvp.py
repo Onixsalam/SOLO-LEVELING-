@@ -40,7 +40,7 @@ def init_pvp_db():
 
 
 # =====================================
-# PLAYER CHECK
+# PLAYER
 # =====================================
 
 def get_player(user_id):
@@ -71,7 +71,7 @@ def is_player_dead(user_id):
 
 
 # =====================================
-# DUEL COMMAND
+# CREATE FRIENDLY DUEL
 # =====================================
 
 async def duel_command(
@@ -83,50 +83,48 @@ async def duel_command(
     user = update.effective_user
 
     if message.chat.type == "private":
+
         await message.reply_text(
             "برای شروع مبارزه باید داخل گروه باشی."
         )
+
         return
 
     if not message.reply_to_message:
+
         await message.reply_text(
-            "برای مبارزه باید روی پیام حریفت ریپلای کنی و /duel بزنی."
+            "روی پیام حریفت ریپلای کن و /duel بزن."
         )
+
         return
 
     opponent = message.reply_to_message.from_user
 
-    if opponent.is_bot:
-        await message.reply_text(
-            "نمی‌تونی با ربات مبارزه کنی."
-        )
-        return
+    if opponent.is_bot or opponent.id == user.id:
 
-    if opponent.id == user.id:
         await message.reply_text(
-            "نمی‌تونی با خودت مبارزه کنی."
+            "این حریف قابل انتخاب نیست."
         )
+
         return
 
     player1 = get_player(user.id)
     player2 = get_player(opponent.id)
 
     if not player1 or not player2:
+
         await message.reply_text(
-            "هر دو بازیکن باید ابتدا با دستور /start ثبت‌نام کنند."
+            "هر دو بازیکن باید ابتدا با /start ثبت‌نام کنند."
         )
+
         return
 
-    if is_player_dead(user.id):
-        await message.reply_text(
-            "تو هنوز در وضعیت DEAD هستی و نمی‌تونی مبارزه کنی."
-        )
-        return
+    if is_player_dead(user.id) or is_player_dead(opponent.id):
 
-    if is_player_dead(opponent.id):
         await message.reply_text(
-            "حریفت فعلاً قادر به مبارزه نیست."
+            "یکی از بازیکن‌ها فعلاً قادر به مبارزه نیست."
         )
+
         return
 
     with db.connect() as conn:
@@ -147,19 +145,21 @@ async def duel_command(
         )).fetchone()
 
         if active:
+
             await message.reply_text(
                 "یکی از بازیکن‌ها در حال حاضر مبارزه فعالی داره."
             )
+
             return
 
     battle_message = await message.reply_text(
-        "⚔️ PVP BATTLE STARTED!\n\n"
-        f"👤 {user.first_name}\n"
+        "⚔️ FRIENDLY PVP STARTED!\n\n"
+        f"👤 {player1['name']}\n"
         f"❤️ HP: {player1['hp']}\n\n"
         "VS\n\n"
-        f"👤 {opponent.first_name}\n"
+        f"👤 {player2['name']}\n"
         f"❤️ HP: {player2['hp']}\n\n"
-        "برای حمله، روی همین پیام ریپلای کن "
+        "برای حمله روی همین پیام ریپلای کن "
         "و اسم یکی از مهارت‌هات رو بنویس."
     )
 
@@ -185,6 +185,40 @@ async def duel_command(
 
 
 # =====================================
+# FRIENDLY DEATH
+# =====================================
+
+def finish_friendly_pvp(winner_id, loser_id):
+
+    with db.connect() as conn:
+
+        conn.execute("""
+        UPDATE players
+        SET wins = wins + 1
+        WHERE user_id = ?
+        """, (winner_id,))
+
+        conn.execute("""
+        UPDATE players
+        SET losses = losses + 1,
+            deaths = deaths + 1,
+            hp = 0,
+            is_dead = 1
+        WHERE user_id = ?
+        """, (loser_id,))
+
+        conn.execute("""
+        INSERT INTO pvp_revives (user_id, revive_at)
+        VALUES (?, ?)
+        ON CONFLICT(user_id)
+        DO UPDATE SET revive_at = excluded.revive_at
+        """, (
+            loser_id,
+            time.time() + lifecycle.REVIVE_SECONDS
+        ))
+
+
+# =====================================
 # COMBAT REPLY
 # =====================================
 
@@ -199,7 +233,7 @@ async def combat_reply(
     if not message or not message.reply_to_message:
         return
 
-    if not message.text:
+    if not message.text or user.is_bot:
         return
 
     with db.connect() as conn:
@@ -233,9 +267,11 @@ async def combat_reply(
     )
 
     if is_player_dead(attacker_id):
+
         await message.reply_text(
             "تو در وضعیت DEAD هستی و نمی‌تونی حمله کنی."
         )
+
         return
 
     if is_player_dead(defender_id):
@@ -253,6 +289,7 @@ async def combat_reply(
     )
 
     if not success:
+
         await message.reply_text(str(result))
         return
 
@@ -263,41 +300,96 @@ async def combat_reply(
     attacker = get_player(attacker_id)
     defender = get_player(defender_id)
 
+    # =================================
+    # MATCH FINISHED
+    # =================================
+
     if result["defeated"]:
 
         with db.connect() as conn:
 
-            conn.execute("""
+            updated = conn.execute("""
             UPDATE pvp_matches
             SET status = 'finished'
             WHERE id = ?
             AND status = 'active'
             """, (match["id"],))
 
-        lifecycle.finish_pvp(
-            winner_id=attacker_id,
-            loser_id=defender_id
-        )
+            if updated.rowcount != 1:
+                return
+
+            ranked_match = conn.execute("""
+            SELECT id
+            FROM ranked_matches
+            WHERE battle_message_id = ?
+            AND battle_chat_id = ?
+            AND status = 'active'
+            """, (
+                match["message_id"],
+                match["chat_id"]
+            )).fetchone()
+
+            if ranked_match:
+
+                ranked_updated = conn.execute("""
+                UPDATE ranked_matches
+                SET status = 'finished'
+                WHERE id = ?
+                AND status = 'active'
+                """, (ranked_match["id"],))
+
+            else:
+                ranked_updated = None
+
+        # Ranked match: award points only once.
+        if ranked_match and ranked_updated.rowcount == 1:
+
+            lifecycle.finish_pvp(
+                winner_id=attacker_id,
+                loser_id=defender_id
+            )
+
+            points_text = (
+                f"🏆 +{lifecycle.WIN_POINTS} Rank Points\n"
+                f"📉 -{lifecycle.LOSE_POINTS} Rank Points"
+            )
+
+        else:
+
+            # Friendly duel: no rank points.
+            finish_friendly_pvp(
+                winner_id=attacker_id,
+                loser_id=defender_id
+            )
+
+            points_text = (
+                "🤝 Friendly Match\n"
+                "امتیاز رنک تغییری نکرد."
+            )
 
         await message.reply_text(
-            "🏆 PVP FINISHED!\n\n"
-            f"👑 برنده: {attacker['name']}\n"
-            f"💀 بازنده: {defender['name']}\n\n"
-            f"⚔️ Damage: {damage}\n"
-            "☠️ وضعیت بازنده: DEAD\n"
-            "⏳ زمان احیا: ۵ دقیقه\n\n"
-            "امتیاز رنک بازیکن‌ها به‌روزرسانی شد."
+            "🏆 MATCH FINISHED!\n\n"
+            f"👑 Winner: {attacker['name']}\n"
+            f"💀 Loser: {defender['name']}\n\n"
+            f"💥 Final Damage: {damage}\n"
+            "☠️ Loser Status: DEAD\n"
+            "⏳ Revival: 5 Minutes\n\n"
+            f"{points_text}"
         )
 
         return
 
+    # =================================
+    # ATTACK RESULT
+    # =================================
+
     await message.reply_text(
         "⚔️ ATTACK RESULT\n\n"
-        f"👤 مهاجم: {attacker['name']}\n"
-        f"🎯 هدف: {defender['name']}\n\n"
+        f"👤 Attacker: {attacker['name']}\n"
+        f"🎯 Target: {defender['name']}\n\n"
         f"💥 Damage: {damage}\n"
-        f"❤️ HP باقی‌مانده: {defender_hp}\n"
-        f"🔮 MP مهاجم: {attacker_mp}"
+        f"❤️ Remaining HP: {defender_hp}\n"
+        f"🔮 Attacker MP: {attacker_mp}"
     )
 
 

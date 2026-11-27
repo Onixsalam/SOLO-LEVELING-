@@ -5,7 +5,9 @@ from pathlib import Path
 from contextlib import contextmanager
 
 
-# ================= DATABASE SETTINGS =================
+# ==================================================
+# DATABASE SETTINGS
+# ==================================================
 
 DATABASE_PATH = os.getenv(
     "DATABASE_PATH",
@@ -13,14 +15,12 @@ DATABASE_PATH = os.getenv(
 )
 
 DB_FILE = Path(DATABASE_PATH)
-
-DB_FILE.parent.mkdir(
-    parents=True,
-    exist_ok=True
-)
+DB_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
-# ================= CONNECTION =================
+# ==================================================
+# CONNECTION
+# ==================================================
 
 @contextmanager
 def connect():
@@ -51,15 +51,19 @@ def get_db_path():
     return str(DB_FILE.resolve())
 
 
-# ================= DATABASE INIT =================
+# ==================================================
+# DATABASE INITIALIZATION
+# ==================================================
 
 def init_db():
+
     with connect() as db:
 
         # PLAYERS
         db.execute("""
             CREATE TABLE IF NOT EXISTS players (
                 user_id INTEGER PRIMARY KEY,
+
                 username TEXT DEFAULT '',
                 name TEXT DEFAULT 'Hunter',
 
@@ -107,29 +111,31 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS inventory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 user_id INTEGER NOT NULL,
                 item_name TEXT NOT NULL,
                 item_type TEXT DEFAULT 'item',
                 quantity INTEGER DEFAULT 1,
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
-        # OLD SKILLS TABLE
+        # OLD SKILLS
         db.execute("""
             CREATE TABLE IF NOT EXISTS skills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 user_id INTEGER NOT NULL,
                 skill_name TEXT NOT NULL,
                 damage INTEGER DEFAULT 10,
                 skill_type TEXT DEFAULT 'attack',
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -137,18 +143,21 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS player_skills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 user_id INTEGER NOT NULL,
                 skill_name TEXT NOT NULL,
+
                 skill_type TEXT DEFAULT 'attack',
                 damage INTEGER DEFAULT 10,
+
                 mp_cost INTEGER DEFAULT 0,
                 cooldown INTEGER DEFAULT 0,
 
                 UNIQUE(user_id, skill_name),
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -156,15 +165,17 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS shadows (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 user_id INTEGER NOT NULL,
                 shadow_name TEXT NOT NULL,
+
                 shadow_rank TEXT DEFAULT 'E',
                 level INTEGER DEFAULT 1,
                 loyalty INTEGER DEFAULT 50,
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -172,13 +183,15 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS titles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 user_id INTEGER NOT NULL,
                 title_name TEXT NOT NULL,
+
                 active INTEGER DEFAULT 0,
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -186,13 +199,15 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS monsters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 user_id INTEGER NOT NULL,
                 monster_name TEXT NOT NULL,
+
                 quantity INTEGER DEFAULT 1,
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -200,10 +215,13 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS battle_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+
                 attacker_id INTEGER,
                 defender_id INTEGER,
-                damage INTEGER,
-                result TEXT,
+
+                damage INTEGER DEFAULT 0,
+                result TEXT DEFAULT '',
+
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -211,10 +229,12 @@ def init_db():
         # WORLD BOSS
         db.execute("""
             CREATE TABLE IF NOT EXISTS world_boss (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+
                 boss_name TEXT,
-                hp INTEGER,
-                max_hp INTEGER,
+                hp INTEGER DEFAULT 0,
+                max_hp INTEGER DEFAULT 0,
+
                 active INTEGER DEFAULT 0
             )
         """)
@@ -223,11 +243,12 @@ def init_db():
         db.execute("""
             CREATE TABLE IF NOT EXISTS world_boss_damage (
                 user_id INTEGER PRIMARY KEY,
+
                 damage INTEGER DEFAULT 0,
 
                 FOREIGN KEY(user_id)
-                REFERENCES players(user_id)
-                ON DELETE CASCADE
+                    REFERENCES players(user_id)
+                    ON DELETE CASCADE
             )
         """)
 
@@ -265,9 +286,12 @@ def init_db():
     migrate_db()
 
 
-# ================= DATABASE MIGRATION =================
+# ==================================================
+# DATABASE MIGRATION
+# ==================================================
 
 def migrate_db():
+
     with connect() as db:
 
         columns = {
@@ -289,44 +313,70 @@ def migrate_db():
             "max_hp": "INTEGER DEFAULT 100",
             "mp": "INTEGER DEFAULT 50",
             "max_mp": "INTEGER DEFAULT 50",
+
             "strength": "INTEGER DEFAULT 5",
             "agility": "INTEGER DEFAULT 5",
             "vitality": "INTEGER DEFAULT 5",
             "intelligence": "INTEGER DEFAULT 5",
             "sense": "INTEGER DEFAULT 5",
+
             "STR": "INTEGER DEFAULT 5",
             "AGI": "INTEGER DEFAULT 5",
             "VIT": "INTEGER DEFAULT 5",
             "INT": "INTEGER DEFAULT 5",
             "SEN": "INTEGER DEFAULT 5",
+
             "stat_points": "INTEGER DEFAULT 0",
             "power": "INTEGER DEFAULT 25",
+
             "wins": "INTEGER DEFAULT 0",
             "losses": "INTEGER DEFAULT 0",
             "kills": "INTEGER DEFAULT 0",
             "deaths": "INTEGER DEFAULT 0",
+
             "is_dead": "INTEGER DEFAULT 0"
         }
 
+        newly_added = set()
+
         for column, definition in required_columns.items():
+
             if column not in columns:
+
                 db.execute(
                     f"ALTER TABLE players ADD COLUMN "
                     f"{column} {definition}"
                 )
 
-        # همگام‌سازی اولیه آمار قدیمی و جدید
-        db.execute("""
-            UPDATE players
-            SET
-                STR = COALESCE(strength, 5),
-                AGI = COALESCE(agility, 5),
-                VIT = COALESCE(vitality, 5),
-                INT = COALESCE(intelligence, 5),
-                SEN = COALESCE(sense, 5)
-        """)
+                newly_added.add(column)
 
-        # انتقال مهارت‌های قدیمی به جدول جدید
+        # فقط در اولین اضافه شدن ستون‌های جدید،
+        # مقدار آمار قدیمی به ستون‌های جدید منتقل می‌شود.
+        stat_pairs = [
+            ("STR", "strength"),
+            ("AGI", "agility"),
+            ("VIT", "vitality"),
+            ("INT", "intelligence"),
+            ("SEN", "sense")
+        ]
+
+        for upper, lower in stat_pairs:
+
+            if upper in newly_added and lower not in newly_added:
+
+                db.execute(f"""
+                    UPDATE players
+                    SET {upper} = COALESCE({lower}, 5)
+                """)
+
+            elif lower in newly_added and upper not in newly_added:
+
+                db.execute(f"""
+                    UPDATE players
+                    SET {lower} = COALESCE({upper}, 5)
+                """)
+
+        # انتقال مهارت‌های قدیمی
         db.execute("""
             INSERT OR IGNORE INTO player_skills (
                 user_id,
@@ -346,11 +396,23 @@ def migrate_db():
             FROM skills
         """)
 
-        # Trigger برای همگام‌سازی آمار
+        # حذف Triggerهای قدیمی برای ساخت نسخه امن‌تر
+        db.execute("DROP TRIGGER IF EXISTS sync_lower_stats")
+        db.execute("DROP TRIGGER IF EXISTS sync_upper_stats")
+
+        # همگام‌سازی آمار در هر دو جهت
         db.execute("""
-            CREATE TRIGGER IF NOT EXISTS sync_lower_stats
+            CREATE TRIGGER sync_lower_stats
             AFTER UPDATE OF STR, AGI, VIT, INT, SEN
             ON players
+
+            WHEN
+                NEW.STR != OLD.STR OR
+                NEW.AGI != OLD.AGI OR
+                NEW.VIT != OLD.VIT OR
+                NEW.INT != OLD.INT OR
+                NEW.SEN != OLD.SEN
+
             BEGIN
                 UPDATE players
                 SET
@@ -364,10 +426,18 @@ def migrate_db():
         """)
 
         db.execute("""
-            CREATE TRIGGER IF NOT EXISTS sync_upper_stats
+            CREATE TRIGGER sync_upper_stats
             AFTER UPDATE OF strength, agility, vitality,
                             intelligence, sense
             ON players
+
+            WHEN
+                NEW.strength != OLD.strength OR
+                NEW.agility != OLD.agility OR
+                NEW.vitality != OLD.vitality OR
+                NEW.intelligence != OLD.intelligence OR
+                NEW.sense != OLD.sense
+
             BEGIN
                 UPDATE players
                 SET
@@ -381,10 +451,14 @@ def migrate_db():
         """)
 
 
-# ================= PLAYER =================
+# ==================================================
+# PLAYER FUNCTIONS
+# ==================================================
 
 def get_player(user_id):
+
     with connect() as db:
+
         return db.execute("""
             SELECT *
             FROM players
@@ -393,7 +467,9 @@ def get_player(user_id):
 
 
 def register_player(user_id, username, name):
+
     with connect() as db:
+
         cursor = db.execute("""
             INSERT OR IGNORE INTO players (
                 user_id,
@@ -411,18 +487,24 @@ def register_player(user_id, username, name):
 
 
 def update_player(user_id, **values):
+
     allowed = {
         "username", "name",
         "level", "xp",
         "gold", "crystals",
         "rank",
+
         "hp", "max_hp",
         "mp", "max_mp",
+
         "strength", "agility",
         "vitality", "intelligence",
         "sense",
+
         "STR", "AGI", "VIT", "INT", "SEN",
+
         "stat_points", "power",
+
         "wins", "losses",
         "kills", "deaths",
         "is_dead"
@@ -437,367 +519,21 @@ def update_player(user_id, **values):
     if not values:
         return False
 
-    columns = ", ".join(
+    assignments = ", ".join(
         f"{key} = ?" for key in values
     )
 
-    params = list(values.values()) + [user_id]
+    parameters = list(values.values()) + [user_id]
 
     with connect() as db:
+
         cursor = db.execute(
             f"""
             UPDATE players
-            SET {columns}
+            SET {assignments}
             WHERE user_id = ?
             """,
-            params
+            parameters
         )
 
     return cursor.rowcount > 0
-# ================= INVENTORY =================
-
-def add_item(user_id, item_name, item_type="item", quantity=1):
-    if quantity <= 0:
-        return False
-
-    with connect() as db:
-        db.execute("""
-            INSERT INTO inventory (
-                user_id,
-                item_name,
-                item_type,
-                quantity
-            )
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO NOTHING
-        """, (
-            user_id,
-            item_name,
-            item_type,
-            quantity
-        ))
-
-        row = db.execute("""
-            SELECT id
-            FROM inventory
-            WHERE user_id = ?
-            AND item_name = ?
-        """, (user_id, item_name)).fetchone()
-
-        if row:
-            db.execute("""
-                UPDATE inventory
-                SET quantity = quantity + ?
-                WHERE id = ?
-                AND item_type = ?
-            """, (
-                quantity - 1,
-                row["id"],
-                item_type
-            ))
-
-    return True
-
-
-def get_inventory(user_id):
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM inventory
-            WHERE user_id = ?
-            AND quantity > 0
-            ORDER BY id DESC
-        """, (user_id,)).fetchall()
-
-
-# ================= SKILLS =================
-
-def get_skills(user_id):
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM player_skills
-            WHERE user_id = ?
-            ORDER BY id
-        """, (user_id,)).fetchall()
-
-
-def add_skill(
-    user_id,
-    skill_name,
-    damage=10,
-    skill_type="attack",
-    mp_cost=0,
-    cooldown=0
-):
-    with connect() as db:
-        db.execute("""
-            INSERT OR IGNORE INTO player_skills (
-                user_id,
-                skill_name,
-                skill_type,
-                damage,
-                mp_cost,
-                cooldown
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            skill_name,
-            skill_type,
-            damage,
-            mp_cost,
-            cooldown
-        ))
-
-
-# ================= SHADOWS =================
-
-def get_shadows(user_id):
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM shadows
-            WHERE user_id = ?
-            ORDER BY level DESC
-        """, (user_id,)).fetchall()
-
-
-def add_shadow(
-    user_id,
-    shadow_name,
-    shadow_rank="E"
-):
-    with connect() as db:
-        db.execute("""
-            INSERT INTO shadows (
-                user_id,
-                shadow_name,
-                shadow_rank
-            )
-            VALUES (?, ?, ?)
-        """, (
-            user_id,
-            shadow_name,
-            shadow_rank
-        ))
-
-
-# ================= TITLES =================
-
-def get_titles(user_id):
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM titles
-            WHERE user_id = ?
-            ORDER BY id DESC
-        """, (user_id,)).fetchall()
-
-
-def add_title(user_id, title_name):
-    with connect() as db:
-        db.execute("""
-            INSERT INTO titles (
-                user_id,
-                title_name
-            )
-            VALUES (?, ?)
-        """, (
-            user_id,
-            title_name
-        ))
-
-
-# ================= MONSTER COLLECTION =================
-
-def get_monsters(user_id):
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM monsters
-            WHERE user_id = ?
-            ORDER BY quantity DESC
-        """, (user_id,)).fetchall()
-
-
-def add_monster(user_id, monster_name):
-    with connect() as db:
-        row = db.execute("""
-            SELECT id
-            FROM monsters
-            WHERE user_id = ?
-            AND monster_name = ?
-        """, (
-            user_id,
-            monster_name
-        )).fetchone()
-
-        if row:
-            db.execute("""
-                UPDATE monsters
-                SET quantity = quantity + 1
-                WHERE id = ?
-            """, (row["id"],))
-
-        else:
-            db.execute("""
-                INSERT INTO monsters (
-                    user_id,
-                    monster_name,
-                    quantity
-                )
-                VALUES (?, ?, 1)
-            """, (
-                user_id,
-                monster_name
-            ))
-
-
-# ================= BATTLE HISTORY =================
-
-def add_battle_log(
-    attacker_id,
-    defender_id,
-    damage,
-    result
-):
-    with connect() as db:
-        db.execute("""
-            INSERT INTO battle_logs (
-                attacker_id,
-                defender_id,
-                damage,
-                result
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            attacker_id,
-            defender_id,
-            damage,
-            result
-        ))
-
-
-def get_battle_history(user_id, limit=10):
-    limit = max(1, min(int(limit), 100))
-
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM battle_logs
-            WHERE attacker_id = ?
-            OR defender_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-        """, (
-            user_id,
-            user_id,
-            limit
-        )).fetchall()
-
-
-# ================= WORLD BOSS =================
-
-def save_world_boss(name, hp):
-    hp = max(1, int(hp))
-
-    with connect() as db:
-        db.execute("""
-            INSERT OR REPLACE INTO world_boss (
-                id,
-                boss_name,
-                hp,
-                max_hp,
-                active
-            )
-            VALUES (1, ?, ?, ?, 1)
-        """, (
-            name,
-            hp,
-            hp
-        ))
-
-        db.execute("""
-            DELETE FROM world_boss_damage
-        """)
-
-
-def get_world_boss():
-    with connect() as db:
-        return db.execute("""
-            SELECT *
-            FROM world_boss
-            WHERE id = 1
-        """).fetchone()
-
-
-def damage_world_boss(user_id, damage):
-    damage = max(0, int(damage))
-
-    if damage <= 0:
-        return None
-
-    with connect() as db:
-        db.execute("BEGIN IMMEDIATE")
-
-        boss = db.execute("""
-            SELECT *
-            FROM world_boss
-            WHERE id = 1
-            AND active = 1
-        """).fetchone()
-
-        if not boss:
-            return None
-
-        actual_damage = min(
-            damage,
-            boss["hp"]
-        )
-
-        new_hp = max(
-            0,
-            boss["hp"] - actual_damage
-        )
-
-        db.execute("""
-            UPDATE world_boss
-            SET hp = ?,
-                active = ?
-            WHERE id = 1
-        """, (
-            new_hp,
-            1 if new_hp > 0 else 0
-        ))
-
-        db.execute("""
-            INSERT INTO world_boss_damage (
-                user_id,
-                damage
-            )
-            VALUES (?, ?)
-            ON CONFLICT(user_id)
-            DO UPDATE SET
-                damage = damage + excluded.damage
-        """, (
-            user_id,
-            actual_damage
-        ))
-
-        return new_hp
-
-
-def get_world_boss_ranking():
-    with connect() as db:
-        return db.execute("""
-            SELECT
-                world_boss_damage.user_id,
-                world_boss_damage.damage,
-                players.name
-            FROM world_boss_damage
-            LEFT JOIN players
-                ON players.user_id = world_boss_damage.user_id
-            ORDER BY world_boss_damage.damage DESC
-            LIMIT 10
-        """).fetchall()

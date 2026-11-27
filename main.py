@@ -29,165 +29,298 @@ from pvp import setup_pvp
 
 
 # =====================================
-# MAIN MENU
+# DATABASE MIGRATION
+# =====================================
+
+def ensure_player_columns():
+
+    with db.connect() as conn:
+
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(players)"
+            ).fetchall()
+        }
+
+        required = {
+            "is_dead": "INTEGER DEFAULT 0",
+            "wins": "INTEGER DEFAULT 0",
+            "losses": "INTEGER DEFAULT 0",
+            "deaths": "INTEGER DEFAULT 0"
+        }
+
+        for column, definition in required.items():
+
+            if column not in columns:
+
+                conn.execute(
+                    f"ALTER TABLE players ADD COLUMN "
+                    f"{column} {definition}"
+                )
+
+
+# =====================================
+# KEYBOARDS
 # =====================================
 
 def main_menu():
 
     keyboard = [
+
         [
-            InlineKeyboardButton("👤 Profile", callback_data="profile"),
-            InlineKeyboardButton("📊 Status", callback_data="status")
+            InlineKeyboardButton(
+                "👤 Profile",
+                callback_data="profile"
+            ),
+
+            InlineKeyboardButton(
+                "📊 Status",
+                callback_data="stats_menu"
+            )
         ],
+
         [
-            InlineKeyboardButton("⚔️ Battle", callback_data="battle"),
-            InlineKeyboardButton("🏰 Dungeon", callback_data="dungeon")
+            InlineKeyboardButton(
+                "⚔️ Battle",
+                callback_data="battle"
+            ),
+
+            InlineKeyboardButton(
+                "🏰 Dungeon",
+                callback_data="dungeon"
+            )
         ],
+
         [
-            InlineKeyboardButton("👥 Shadows", callback_data="shadows"),
-            InlineKeyboardButton("🎒 Inventory", callback_data="inventory")
+            InlineKeyboardButton(
+                "👥 Shadows",
+                callback_data="shadows"
+            ),
+
+            InlineKeyboardButton(
+                "🎒 Inventory",
+                callback_data="inventory"
+            )
         ],
+
         [
-            InlineKeyboardButton("🛒 Shop", callback_data="shop"),
-            InlineKeyboardButton("✨ Awakening", callback_data="awakening")
+            InlineKeyboardButton(
+                "🛒 Shop",
+                callback_data="shop"
+            ),
+
+            InlineKeyboardButton(
+                "✨ Awakening",
+                callback_data="awakening"
+            )
         ],
+
         [
-            InlineKeyboardButton("📈 Upgrade Stats", callback_data="stats_menu"),
-            InlineKeyboardButton("⚔️ My Skills", callback_data="show_skills")
+            InlineKeyboardButton(
+                "📈 Upgrade Stats",
+                callback_data="stats_menu"
+            ),
+
+            InlineKeyboardButton(
+                "📜 My Skills",
+                callback_data="show_skills"
+            )
         ],
+
         [
-            InlineKeyboardButton("📜 Quests", callback_data="quests")
+            InlineKeyboardButton(
+                "📋 Quests",
+                callback_data="quests"
+            )
         ]
+
     ]
 
     return InlineKeyboardMarkup(keyboard)
 
 
-# =====================================
-# BATTLE MENU
-# =====================================
-
 def battle_menu():
 
     keyboard = [
+
         [
             InlineKeyboardButton(
-                "🔥 Training",
+                "🥊 Training",
                 callback_data="training"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "🏆 Ranked Match",
-                callback_data="rank"
+                callback_data="ranked"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "🔙 Back",
                 callback_data="home"
             )
         ]
+
     ]
 
     return InlineKeyboardMarkup(keyboard)
 
 
+def back_button():
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🔙 Back",
+                callback_data="home"
+            )
+        ]
+    ])
+
+
 # =====================================
-# START
+# PLAYER DATA
 # =====================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def get_player(user_id):
 
-    if update.effective_chat.type != "private":
+    with db.connect() as conn:
 
-        await update.message.reply_text(
-            "برای شروع بازی وارد چت خصوصی ربات شو و /start رو بزن."
+        return conn.execute(
+            """
+            SELECT *
+            FROM players
+            WHERE user_id = ?
+            """,
+            (user_id,)
+        ).fetchone()
+
+
+# =====================================
+# START COMMAND
+# =====================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    user = update.effective_user
+    message = update.effective_message
+
+    if message.chat.type != "private":
+
+        await message.reply_text(
+            "برای استفاده از منوی بازی وارد چت خصوصی بات شو."
         )
 
         return
 
-    user = update.effective_user
-
-    player = db.get_player(user.id)
+    player = get_player(user.id)
 
     if not player:
 
         db.register_player(
             user.id,
-            user.username or "",
-            user.first_name or "Hunter"
+            user.username,
+            user.first_name
         )
 
-    await update.message.reply_text(
-        f"🌑 Welcome to {GAME_NAME}\n\n"
-        "سیستم شکارچی فعال شد!\n"
-        "آماده‌ای وارد دنیای سایه‌ها بشی؟",
+    await message.reply_text(
+        f"🌑 WELCOME TO {GAME_NAME}\n\n"
+        "به دنیای شکارچیان خوش اومدی!\n"
+        "ماجراجویی تو از اینجا شروع می‌شه.",
         reply_markup=main_menu()
     )
 
 
 # =====================================
-# HELP
+# HELP COMMAND
 # =====================================
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-    await update.message.reply_text(
-        "📖 SHADOW LEGACY GUIDE\n\n"
+    await update.effective_message.reply_text(
+        "📖 SHADOW LEGACY HELP\n\n"
         "/start - شروع بازی\n"
         "/help - راهنما\n"
         "/skills - مشاهده مهارت‌ها\n"
-        "/duel - شروع مبارزه با Reply\n\n"
-        "برای استفاده از امکانات بازی از منوی اصلی استفاده کن."
+        "/duel - شروع مبارزه با ریپلای\n\n"
+        "برای مبارزه در گروه، روی پیام حریفت "
+        "ریپلای کن و /duel بفرست."
     )
 
 
 # =====================================
-# SKILLS
+# SKILLS COMMAND
 # =====================================
 
-async def skills_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def skills_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-    if update.effective_chat.type != "private":
-        return
+    user = update.effective_user
+    message = update.effective_message
 
-    user_id = update.effective_user.id
-
-    player = db.get_player(user_id)
-
-    if not player:
-
-        await update.message.reply_text(
-            "اول دستور /start رو بزن."
+    if message.chat.type != "private":
+        await message.reply_text(
+            "مهارت‌ها رو در چت خصوصی بات مشاهده کن."
         )
-
         return
 
-    unlock_available_skills(user_id)
+    if not get_player(user.id):
+        await message.reply_text(
+            "ابتدا با دستور /start ثبت‌نام کن."
+        )
+        return
 
-    await update.message.reply_text(
-        skills_text(user_id)
+    unlock_available_skills(user.id)
+
+    await message.reply_text(
+        skills_text(user.id)
     )
 
 
 # =====================================
-# HOME
+# HOME CALLBACK
 # =====================================
 
-async def home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def home_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
 
     if query.message.chat.type != "private":
-        await query.answer()
+        await query.answer(
+            "این منو فقط در چت خصوصی قابل استفاده است.",
+            show_alert=True
+        )
+        return
+
+    player = get_player(query.from_user.id)
+
+    if not player:
+        await query.answer(
+            "ابتدا ثبت‌نام کن.",
+            show_alert=True
+        )
         return
 
     await query.answer()
 
     await query.edit_message_text(
-        "🌑 SHADOW LEGACY\n\n"
-        "منوی اصلی شکارچی:",
+        f"🌑 {GAME_NAME}\n\n"
+        "منوی اصلی بازی:",
         reply_markup=main_menu()
     )
 
@@ -196,23 +329,30 @@ async def home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MENU CALLBACK
 # =====================================
 
-async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def menu_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
-
-    user = query.from_user
-    action = query.data
+    user_id = query.from_user.id
+    data = query.data
 
     if query.message.chat.type != "private":
-        await query.answer()
+
+        await query.answer(
+            "این منو فقط در چت خصوصی قابل استفاده است.",
+            show_alert=True
+        )
+
         return
 
-    player = db.get_player(user.id)
+    player = get_player(user_id)
 
     if not player:
 
         await query.answer(
-            "اول دستور /start رو بزن.",
+            "ابتدا با دستور /start ثبت‌نام کن.",
             show_alert=True
         )
 
@@ -220,174 +360,228 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
+    # =================================
     # PROFILE
+    # =================================
 
-    if action == "profile":
+    if data == "profile":
 
-        await query.edit_message_text(
-            f"👤 HUNTER PROFILE\n\n"
+        player = get_player(user_id)
+
+        text = (
+            "👤 HUNTER PROFILE\n\n"
             f"Name: {player['name']}\n"
             f"Level: {player['level']}\n"
-            f"Rank: {player['rank']}\n"
-            f"Power: {player['power']}\n"
+            f"HP: {player['hp']}\n"
+            f"MP: {player['mp']}\n"
             f"Gold: {player['gold']}\n"
-            f"Crystals: {player['crystals']}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
+            f"Crystals: {player['crystals']}\n"
+            f"Power: {player['power']}\n"
         )
-
-    # STATUS
-
-    elif action == "status":
-
-        await query.edit_message_text(
-            f"📊 HUNTER STATUS\n\n"
-            f"⭐ Level: {player['level']}\n"
-            f"✨ EXP: {player['xp']}\n\n"
-            f"❤️ HP: {player['hp']}\n"
-            f"🔮 MP: {player['mp']}\n\n"
-            f"💪 STR: {player['STR']}\n"
-            f"⚡ AGI: {player['AGI']}\n"
-            f"🛡 VIT: {player['VIT']}\n"
-            f"🧠 INT: {player['INT']}\n"
-            f"👁 SEN: {player['SEN']}\n\n"
-            f"📈 Stat Points: {player['stat_points']}\n"
-            f"⚔ Power: {player['power']}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📈 Upgrade Stats", callback_data="stats_menu")],
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
-        )
-
-    # BATTLE
-
-    elif action == "battle":
-
-        await query.edit_message_text(
-            "⚔️ BATTLE CENTER\n\n"
-            "یکی از بخش‌های مبارزه رو انتخاب کن:",
-            reply_markup=battle_menu()
-        )
-
-    # TRAINING
-
-    elif action == "training":
-
-        await query.edit_message_text(
-            "🔥 TRAINING CENTER\n\n"
-            "سیستم تمرین در مرحله بعدی فعال می‌شه.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="battle")]
-            ])
-        )
-
-    # INVENTORY
-
-    elif action == "inventory":
-
-        items = db.get_inventory(user.id)
-
-        if not items:
-            text = "🎒 INVENTORY\n\nکیف تو خالیه."
-
-        else:
-            text = "🎒 INVENTORY\n\n"
-
-            for item in items:
-                text += f"📦 {item['item_name']} × {item['quantity']}\n"
 
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
+            reply_markup=back_button()
         )
 
+    # =================================
+    # BATTLE
+    # =================================
+
+    elif data == "battle":
+
+        await query.edit_message_text(
+            "⚔️ BATTLE CENTER\n\n"
+            "نوع مبارزه خودت رو انتخاب کن:",
+            reply_markup=battle_menu()
+        )
+
+    # =================================
+    # TRAINING
+    # =================================
+
+    elif data == "training":
+
+        await query.edit_message_text(
+            "🥊 TRAINING CENTER\n\n"
+            "بخش تمرینی در مرحله بعدی به سیستم مبارزه "
+            "و مهارت‌ها متصل می‌شه.",
+            reply_markup=back_button()
+        )
+
+    # =================================
+    # RANKED MATCH
+    # =================================
+
+    elif data == "ranked":
+
+        await query.edit_message_text(
+            "🏆 RANKED MATCH\n\n"
+            "سیستم پیدا کردن حریف و مسابقات رتبه‌بندی "
+            "در مرحله بعدی پیاده‌سازی می‌شه.",
+            reply_markup=back_button()
+        )
+
+    # =================================
+    # DUNGEON
+    # =================================
+
+    elif data == "dungeon":
+
+        await query.edit_message_text(
+            "🏰 DUNGEON GATE\n\n"
+            "دروازه‌ها و دانجن‌ها در این بخش قرار می‌گیرن.\n\n"
+            "سیستم ورود، مبارزه، جایزه و باس‌ها "
+            "در مراحل بعدی اضافه می‌شه.",
+            reply_markup=back_button()
+        )
+
+    # =================================
     # SHADOWS
+    # =================================
 
-    elif action == "shadows":
+    elif data == "shadows":
 
-        shadows = db.get_shadows(user.id)
+        with db.connect() as conn:
+
+            shadows = conn.execute(
+                """
+                SELECT *
+                FROM shadows
+                WHERE user_id = ?
+                """,
+                (user_id,)
+            ).fetchall()
 
         if not shadows:
-            text = "👥 SHADOW ARMY\n\nهنوز هیچ سایه‌ای نداری."
+
+            text = (
+                "👥 SHADOW ARMY\n\n"
+                "هنوز هیچ شادویی نداری."
+            )
 
         else:
-            text = "👥 SHADOW ARMY\n\n"
+
+            text = "👥 YOUR SHADOW ARMY\n\n"
 
             for shadow in shadows:
+
                 text += (
-                    f"🌑 {shadow['shadow_name']}\n"
+                    f"⚔️ {shadow['shadow_name']}\n"
                     f"Rank: {shadow['shadow_rank']}\n\n"
                 )
 
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
+            reply_markup=back_button()
         )
 
+    # =================================
+    # INVENTORY
+    # =================================
+
+    elif data == "inventory":
+
+        with db.connect() as conn:
+
+            items = conn.execute(
+                """
+                SELECT *
+                FROM inventory
+                WHERE user_id = ?
+                """,
+                (user_id,)
+            ).fetchall()
+
+        if not items:
+
+            text = (
+                "🎒 INVENTORY\n\n"
+                "کیف تو خالیه."
+            )
+
+        else:
+
+            text = "🎒 YOUR INVENTORY\n\n"
+
+            for item in items:
+
+                text += (
+                    f"📦 {item['item_name']}\n"
+                    f"Amount: {item['quantity']}\n\n"
+                )
+
+        await query.edit_message_text(
+            text,
+            reply_markup=back_button()
+        )
+
+    # =================================
     # SHOP
+    # =================================
 
-    elif action == "shop":
+    elif data == "shop":
 
         await query.edit_message_text(
-            "🛒 SHOP\n\n"
-            "فروشگاه در مرحله بعدی ساخته می‌شه.",
+            "🛒 SHADOW SHOP\n\n"
+            "بخش فروشگاه در مرحله بعدی ساخته می‌شه.",
+            reply_markup=back_button()
+        )
+
+    # =================================
+    # AWAKENING
+    # =================================
+
+    elif data == "awakening":
+
+        await query.edit_message_text(
+            "✨ AWAKENING SYSTEM\n\n"
+            "برای مشاهده و انجام بیداری، "
+            "از دکمه زیر استفاده کن.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
+                [
+                    InlineKeyboardButton(
+                        "✨ Open Awakening",
+                        callback_data="awakening"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔙 Back",
+                        callback_data="home"
+                    )
+                ]
             ])
         )
 
-    # DUNGEON
-
-    elif action == "dungeon":
-
-        await query.edit_message_text(
-            "🏰 DUNGEON GATE\n\n"
-            "سیستم دانجن در مرحله بعدی فعال می‌شه.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
-        )
-
-    # RANKED MATCH
-
-    elif action == "rank":
-
-        await query.edit_message_text(
-            "🏆 RANKED MATCH\n\n"
-            "سیستم رنک مچ در مرحله بعدی ساخته می‌شه.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="battle")]
-            ])
-        )
-
-    # QUESTS
-
-    elif action == "quests":
-
-        await query.edit_message_text(
-            "📜 QUEST CENTER\n\n"
-            "سیستم مأموریت‌ها در مرحله بعدی ساخته می‌شه.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
-        )
-
+    # =================================
     # SKILLS
+    # =================================
 
-    elif action == "show_skills":
+    elif data == "show_skills":
 
-        unlock_available_skills(user.id)
+        unlock_available_skills(user_id)
 
         await query.edit_message_text(
-            skills_text(user.id),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="home")]
-            ])
+            skills_text(user_id),
+            reply_markup=back_button()
+        )
+
+    # =================================
+    # QUESTS
+    # =================================
+
+    elif data == "quests":
+
+        await query.edit_message_text(
+            "📋 QUEST CENTER\n\n"
+            "Daily Quests\n"
+            "Main Quests\n"
+            "Hidden Quests\n"
+            "Achievements\n"
+            "Special Quests\n\n"
+            "سیستم مأموریت‌ها در مرحله بعدی ساخته می‌شه.",
+            reply_markup=back_button()
         )
 
 
@@ -397,33 +591,49 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
 
-    # Database
+    print("Initializing Shadow Legacy...")
+
+    # DATABASE
     db.init_db()
 
-    # Progression
+    # DATABASE MIGRATION
+    ensure_player_columns()
+
+    # GAME SYSTEMS
     init_progression_db()
 
-    # Combat database
     combat.init_combat_db()
 
-    # Telegram application
-    app = Application.builder().token(BOT_TOKEN).build()
+    # TELEGRAM APPLICATION
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
 
-    # Awakening
+    # AWAKENING
     setup_awakening(app)
 
-    # Stats
+    # STATS
     setup_stats(app)
 
-    # PvP
+    # PVP + REVIVAL
     setup_pvp(app)
 
-    # Commands
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("skills", skills_command))
+    # COMMANDS
+    app.add_handler(
+        CommandHandler("start", start)
+    )
 
-    # Home
+    app.add_handler(
+        CommandHandler("help", help_command)
+    )
+
+    app.add_handler(
+        CommandHandler("skills", skills_command)
+    )
+
+    # HOME BUTTON
     app.add_handler(
         CallbackQueryHandler(
             home_callback,
@@ -431,15 +641,19 @@ def main():
         )
     )
 
-    # General menu
+    # OTHER MENU BUTTONS
     app.add_handler(
         CallbackQueryHandler(menu_callback)
     )
 
-    print("🌑 SHADOW LEGACY BOT STARTED")
+    print("SHADOW LEGACY IS RUNNING!")
 
     app.run_polling()
 
+
+# =====================================
+# RUN
+# =====================================
 
 if __name__ == "__main__":
     main()

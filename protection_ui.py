@@ -1,222 +1,151 @@
 import logging
 
+import database as db
+import rank_protection
+
 from telegram import (
+    Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update
+    InlineKeyboardMarkup
 )
+
 from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes
 )
 
-import database as db
-import pvp_lifecycle as lifecycle
-
-
 logger = logging.getLogger(__name__)
 
 
-# ==================================================
-# SETTINGS
-# ==================================================
-
-MAX_PROTECTION = lifecycle.MAX_PROTECTION
-
-
-# ==================================================
-# KEYBOARD
-# ==================================================
-
 def protection_keyboard(user_id):
-
-    keyboard = [
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "🔄 Refresh",
+                "🔄 بروزرسانی",
                 callback_data=f"protection_refresh_{user_id}"
             )
         ],
         [
             InlineKeyboardButton(
-                "🏠 Back",
+                "🔙 بازگشت",
                 callback_data=f"protection_back_{user_id}"
             )
         ]
-    ]
+    ])
 
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ==================================================
-# PROTECTION PAGE
-# ==================================================
 
 def protection_page(user_id):
-
-    count = lifecycle.get_protection(user_id)
-
-    count = max(
-        0,
-        min(MAX_PROTECTION, int(count))
-    )
-
-    available = "🛡️" * count
-    empty = "▫️" * (MAX_PROTECTION - count)
+    count = rank_protection.get_protection(user_id)
 
     return (
-        "🛡️ RANK PROTECTION\n\n"
-        f"محافظت‌های ذخیره‌شده: {count}/{MAX_PROTECTION}\n\n"
-        f"{available}{empty}\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "📌 نحوه عملکرد:\n\n"
-        "اگر در مسابقه Ranked شکست بخوری، "
-        "یک محافظت مصرف می‌شود و امتیاز رنکت کم نمی‌شود.\n\n"
-        "هر بازیکن حداکثر دو محافظت می‌تواند داشته باشد.\n\n"
-        "⚠️ محافظت فقط برای باخت Ranked است؛ "
-        "در دوئل دوستانه استفاده نمی‌شود."
+        "🛡️ RANK PROTECTION\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"محافظ‌های باقی‌مانده: {count}/"
+        f"{rank_protection.MAX_PROTECTION}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "نحوه عملکرد:\n\n"
+        "• هنگام باخت در Ranked Match، از کم شدن امتیاز رنک جلوگیری می‌کند.\n"
+        "• هر باخت محافظت‌شده، یک محافظ مصرف می‌کند.\n"
+        "• حداکثر دو محافظ می‌توانی ذخیره کنی.\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "پاداش بردهای متوالی:\n\n"
+        "3 برد: +5 RP\n"
+        "5 برد: +10 RP\n"
+        "7 برد: +15 RP\n"
+        "10 برد: +25 RP\n\n"
+        "🛡️ محافظت فقط در Ranked Match استفاده می‌شود."
     )
 
-
-# ==================================================
-# SHOW PAGE
-# ==================================================
-
-async def show_protection(query, user_id):
-
-    await query.edit_message_text(
-        protection_page(user_id),
-        reply_markup=protection_keyboard(user_id)
-    )
-
-
-# ==================================================
-# COMMAND
-# ==================================================
 
 async def protection_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+    user = update.effective_user
 
     if update.effective_chat.type != "private":
-
         await update.effective_message.reply_text(
-            "این دستور را در چت خصوصی بات اجرا کن."
+            "این دستور فقط در چت خصوصی بات قابل استفاده است."
         )
-
         return
 
-    user_id = update.effective_user.id
-
-    if not db.get_player(user_id):
-
+    if not db.get_player(user.id):
         await update.effective_message.reply_text(
-            "ابتدا دستور /start را اجرا کن."
+            "ابتدا با دستور /start ثبت‌نام کن."
         )
-
         return
 
     await update.effective_message.reply_text(
-        protection_page(user_id),
-        reply_markup=protection_keyboard(user_id)
+        protection_page(user.id),
+        reply_markup=protection_keyboard(user.id)
     )
-# ==================================================
-# CALLBACK
-# ==================================================
-
-async def protection_callback(update, context):
-
+async def protection_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     query = update.callback_query
+    user_id = query.from_user.id
 
-    if not query.message:
-        await query.answer()
-        return
-
-    if query.message.chat.type != "private":
-
+    if (
+        query.message.chat.type != "private"
+        or query.message.chat.id != user_id
+    ):
         await query.answer(
-            "این بخش فقط در چت خصوصی قابل استفاده است.",
+            "این منو فقط در چت خصوصی قابل استفاده است.",
             show_alert=True
         )
-
         return
 
-    parts = query.data.split("_")
-
-    if len(parts) != 3 and len(parts) != 4:
+    try:
+        owner_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
         await query.answer(
             "درخواست نامعتبر است.",
             show_alert=True
         )
         return
 
-    try:
-        owner_id = int(parts[-1])
-    except ValueError:
-        await query.answer(
-            "شناسه بازیکن نامعتبر است.",
-            show_alert=True
-        )
-        return
-
-    user_id = query.from_user.id
-
-    # جلوگیری از استفاده دیگران از صفحه بازیکن
     if owner_id != user_id:
-
         await query.answer(
-            "این صفحه متعلق به بازیکن دیگری است.",
+            "این منو متعلق به شما نیست.",
             show_alert=True
         )
-
         return
 
     if not db.get_player(user_id):
-
         await query.answer(
-            "ابتدا دستور /start را اجرا کن.",
+            "ابتدا با دستور /start ثبت‌نام کن.",
             show_alert=True
         )
-
         return
 
-    action = parts[1]
+    action = query.data.rsplit("_", 1)[0]
 
-    if action == "refresh":
-
-        await query.answer(
-            "اطلاعات به‌روزرسانی شد."
-        )
-
-        await show_protection(
-            query,
-            user_id
-        )
-
-        return
-
-    if action == "back":
-
+    if action == "protection_back":
         await query.answer()
-
         await query.edit_message_text(
             "برای بازگشت به منوی اصلی دستور /start را اجرا کن."
         )
-
         return
 
-    await query.answer()
+    if action == "protection_refresh":
+        await query.answer("اطلاعات بروزرسانی شد.")
 
+        await query.edit_message_text(
+            protection_page(user_id),
+            reply_markup=protection_keyboard(user_id)
+        )
+        return
 
-# ==================================================
-# SETUP
-# ==================================================
+    await query.answer(
+        "درخواست نامعتبر است.",
+        show_alert=True
+    )
+
 
 def setup_protection_ui(application):
-
-    lifecycle.init_lifecycle_db()
+    rank_protection.init_protection_db()
 
     application.add_handler(
         CommandHandler(

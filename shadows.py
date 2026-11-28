@@ -179,3 +179,152 @@ def shadows_text(user_id):
     )
 
     return text
+async def shadows_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user_id = update.effective_user.id
+
+    if update.effective_chat.type != "private":
+        await update.effective_message.reply_text(
+            "این بخش فقط در چت خصوصی قابل استفاده است."
+        )
+        return
+
+    if not db.get_player(user_id):
+        await update.effective_message.reply_text(
+            "ابتدا /start را اجرا کن."
+        )
+        return
+
+    await update.effective_message.reply_text(
+        shadows_text(user_id),
+        reply_markup=shadow_keyboard(user_id)
+    )
+
+
+async def shadows_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+
+    if (
+        not query.message
+        or query.message.chat.type != "private"
+        or query.message.chat.id != query.from_user.id
+    ):
+        await query.answer(
+            "این منو فقط در چت خصوصی قابل استفاده است.",
+            show_alert=True
+        )
+        return
+
+    user_id = query.from_user.id
+
+    if not db.get_player(user_id):
+        await query.answer(
+            "ابتدا /start را اجرا کن.",
+            show_alert=True
+        )
+        return
+
+    action = query.data
+
+    if action == "shadows_refresh":
+        await query.answer("بروزرسانی شد.")
+
+        await query.edit_message_text(
+            shadows_text(user_id),
+            reply_markup=shadow_keyboard(user_id)
+        )
+        return
+
+    if action.startswith("shadow_cmd_"):
+        command = action.replace("shadow_cmd_", "", 1)
+
+        if command not in SHADOW_COMMANDS:
+            await query.answer(
+                "فرمان نامعتبر است.",
+                show_alert=True
+            )
+            return
+
+        if not get_shadows(user_id):
+            await query.answer(
+                "هنوز سرباز سایه‌ای نداری.",
+                show_alert=True
+            )
+            return
+
+        if not set_shadow_command(user_id, command):
+            await query.answer(
+                "ثبت فرمان ناموفق بود.",
+                show_alert=True
+            )
+            return
+
+        await query.answer(
+            f"فرمان {command.upper()} ثبت شد!"
+        )
+
+        await query.edit_message_text(
+            shadows_text(user_id),
+            reply_markup=shadow_keyboard(user_id)
+        )
+
+
+async def shadow_info_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user_id = update.effective_user.id
+
+    if update.effective_chat.type != "private":
+        return
+
+    if not db.get_player(user_id):
+        await update.effective_message.reply_text(
+            "ابتدا /start را اجرا کن."
+        )
+        return
+
+    shadows = get_shadows(user_id)
+
+    if not shadows:
+        await update.effective_message.reply_text(
+            "🌑 هنوز هیچ Shadow نداری."
+        )
+        return
+
+    text = "🌑 YOUR SHADOWS\n\n"
+
+    for shadow in shadows:
+        text += (
+            f"Name: {shadow['shadow_name']}\n"
+            f"Rank: {shadow['shadow_rank']}\n"
+            f"Level: {shadow['level']}\n"
+            f"Loyalty: {shadow['loyalty']}/100\n"
+            "━━━━━━━━━━━━━━\n"
+        )
+
+    await update.effective_message.reply_text(text)
+
+
+def setup_shadows(application):
+    init_shadows_db()
+
+    application.add_handler(
+        CommandHandler("shadows", shadows_command)
+    )
+
+    application.add_handler(
+        CommandHandler("shadowinfo", shadow_info_command)
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            shadows_callback,
+            pattern=r"^(shadows_refresh|shadow_cmd_(attack|defend|follow|guard|retreat|focus|special))$"
+        )
+    )

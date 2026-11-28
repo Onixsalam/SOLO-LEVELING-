@@ -263,6 +263,8 @@ def check_gate_spawns():
             FROM dungeon_schedule
         """).fetchall()
 
+    spawned_any = False
+
     for schedule in schedules:
         if schedule["next_spawn"] > now:
             continue
@@ -271,6 +273,7 @@ def check_gate_spawns():
 
         try:
             create_gate(rank)
+            spawned_any = True
 
             with db.connect() as conn:
                 conn.execute("""
@@ -288,32 +291,23 @@ def check_gate_spawns():
                 rank
             )
 
-    # Special gates are chance-based and are checked once per scheduler run.
-    try:
-        roll = random.random()
-        if roll < RED_GATE_CHANCE:
-            create_gate(random.choice(GATE_RANKS), "red")
-        elif roll < RED_GATE_CHANCE + DOUBLE_DUNGEON_CHANCE:
-            create_gate(random.choice(GATE_RANKS), "double")
-    except Exception:
-        logger.exception("Could not spawn a special Gate")
+    # Roll for a special gate only when a scheduled gate is spawned.
+    # This prevents a 60-second scheduler from creating special gates constantly.
+    if spawned_any:
+        try:
+            roll = random.random()
+            if roll < RED_GATE_CHANCE:
+                create_gate(random.choice(GATE_RANKS), "red")
+            elif roll < RED_GATE_CHANCE + DOUBLE_DUNGEON_CHANCE:
+                create_gate(random.choice(GATE_RANKS), "double")
+        except Exception:
+            logger.exception("Could not spawn a special Gate")
 
 
 def close_expired_gates():
     now = int(time.time())
 
     with db.connect() as conn:
-        conn.execute("""
-            UPDATE dungeon_gates
-            SET status = 'closed'
-            WHERE status = 'open'
-            AND expires_at <= ?
-            AND id NOT IN (
-                SELECT gate_id
-                FROM dungeon_entries
-            )
-        """, (now,))
-
         # Gateهایی که کسی واردشان نشده، پس از ۳۰ دقیقه بسته می‌شوند.
         # Gate دارای بازیکن فعال باز می‌ماند تا مبارزه تمام شود.
         conn.execute("""

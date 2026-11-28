@@ -298,4 +298,203 @@ async def wbattack_command(
         )
         return
 
-    mp
+    mp_cost = int(skill["mp_cost"])
+
+    if player["mp"] < mp_cost:
+        await update.message.reply_text(
+            "🔵 MP کافی نداری."
+        )
+        return
+
+    damage = calculate_boss_damage(player, skill)
+
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        current_boss = conn.execute("""
+            SELECT *
+            FROM world_boss
+            WHERE id = 1
+        """).fetchone()
+
+        if not current_boss or not current_boss["active"]:
+            await update.message.reply_text(
+                "🌑 باس دیگر فعال نیست."
+            )
+            return
+
+        cooldown = conn.execute("""
+            SELECT last_attack
+            FROM world_boss_cooldowns
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+        if cooldown:
+            remaining = BOSS_ATTACK_COOLDOWN - (
+                time.time() - cooldown["last_attack"]
+            )
+
+            if remaining > 0:
+                await update.message.reply_text(
+                    f"⏳ {int(remaining)} ثانیه دیگر تلاش کن."
+                )
+                return
+
+        current_player = conn.execute("""
+            SELECT mp, is_dead
+            FROM players
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+        if not current_player or current_player["is_dead"]:
+            await update.message.reply_text(
+                "❌ وضعیت بازیکن اجازه حمله نمی‌دهد."
+            )
+            return
+
+        if current_player["mp"] < mp_cost:
+            await update.message.reply_text(
+                "🔵 MP کافی نداری."
+            )
+            return
+
+        actual_damage = min(damage, current_boss["hp"])
+        new_hp = current_boss["hp"] - actual_damage
+
+        conn.execute("""
+            UPDATE world_boss
+            SET hp = ?
+            WHERE id = 1
+        """, (new_hp,))
+
+        conn.execute("""
+            UPDATE players
+            SET mp = mp - ?
+            WHERE user_id = ?
+        """, (mp_cost, user_id))
+
+        conn.execute("""
+            INSERT INTO world_boss_damage (user_id, damage)
+            VALUES (?, ?)
+            ON CONFLICT(user_id)
+            DO UPDATE SET damage = damage + excluded.damage
+        """, (user_id, actual_damage))
+
+        conn.execute("""
+            INSERT INTO world_boss_cooldowns (user_id, last_attack)
+            VALUES (?, ?)
+            ON CONFLICT(user_id)
+            DO UPDATE SET last_attack = excluded.last_attack
+        """, (user_id, time.time()))
+
+        defeated = new_hp <= 0
+
+        if defeated:
+            conn.execute("""
+                UPDATE world_boss
+                SET active = 0, hp = 0
+                WHERE id = 1
+            """)
+
+    await update.message.reply_text(
+        f"⚔️ {update.effective_user.first_name} حمله کرد!\n\n"
+        f"✨ Skill: {skill['skill_name']}\n"
+        f"💥 Damage: {actual_damage:,}\n"
+        f"❤️ Boss HP: {new_hp:,} / {boss['max_hp']:,}"
+    )
+
+    if defeated:
+        await give_boss_rewards(context, update.effective_chat.id)
+
+
+async def give_boss_rewards(context, chat_id):
+    damage_list = get_boss_damage()
+
+    rewarded = []
+
+    for row in damage_list:
+        user_id = row["user_id"]
+
+        with db.connect() as conn:
+            cursor = conn.execute("""
+                INSERT OR IGNORE INTO world_boss_rewards
+                (user_id, rewarded_at)
+                VALUES (?, ?)
+            """, (user_id, time.time()))
+
+            if cursor.rowcount == 0:
+                continue
+
+            conn.execute("""
+                UPDATE players
+                SET gold = gold + ?,
+                    crystals = crystals + ?,
+                    xp = xp + ?
+                WHERE user_id = ?
+            """, (
+                BOSS_REWARD_GOLD,
+                BOSS_REWARD_CRYSTALS,
+                BOSS_REWARD_XP,
+                user_id
+            ))
+
+        rewarded.append(user_id)
+
+    message = (
+        "🏆 WORLD BOSS DEFEATED!\n\n"
+        "🌑 Shadow Monarch شکست خورد!\n"
+        "🎁 پاداش مشارکت‌کنندگان:\n"
+        f"🪙 Gold: {BOSS_REWARD_GOLD}\n"
+        f"💎 Crystals: {BOSS_REWARD_CRYSTALS}\n"
+        f"⭐ XP: {BOSS_REWARD_XP}"
+    )
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=message
+    )
+
+
+async def bossend_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    if update.effective_chat.type == "private":
+        await update.message.reply_text(
+            "این دستور فقط در گروه قابل استفاده است."
+        )
+        return
+
+    if not is_boss_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "⛔ اجازه پایان دادن به باس را نداری."
+        )
+        return
+
+    stop_boss()
+
+    await update.message.reply_text(
+        "🌑 مبارزه World Boss پایان یافت."
+    )
+
+
+def setup_world_boss(application: Application):
+    init_world_boss_db()
+
+    application.add_handler(
+        CommandHandler("worldboss", worldboss_command)
+    )
+
+    application.add_handler(
+        CommandHandler("bossstart", bossstart_command)
+    )
+
+    application.add_handler(
+        CommandHandler("bossend", bossend_command)
+    )
+
+    application.add_handler(
+        CommandHandler("wbattack", wbattack_command)
+    )
+
+    logger.info("World Boss system loaded.")

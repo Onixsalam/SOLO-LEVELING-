@@ -10,6 +10,7 @@ from telegram.ext import (
 )
 
 import database as db
+from progression import add_xp
 
 
 logger = logging.getLogger(__name__)
@@ -428,15 +429,18 @@ async def give_boss_rewards(context, chat_id):
             conn.execute("""
                 UPDATE players
                 SET gold = gold + ?,
-                    crystals = crystals + ?,
-                    xp = xp + ?
+                    crystals = crystals + ?
                 WHERE user_id = ?
             """, (
                 BOSS_REWARD_GOLD,
                 BOSS_REWARD_CRYSTALS,
-                BOSS_REWARD_XP,
                 user_id
             ))
+
+        # Progression system handles level-ups and skill unlocks.
+        xp_result = add_xp(user_id, BOSS_REWARD_XP)
+        if not xp_result.get("success"):
+            logger.error("Could not award World Boss XP to %s: %s", user_id, xp_result)
 
         rewarded.append(user_id)
 

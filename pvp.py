@@ -422,17 +422,26 @@ def finish_ranked_match(
         )
 
         if not result:
+            # If lifecycle already committed before a previous interruption,
+            # treat this as completed instead of reopening the PvP match.
             with db.connect() as conn:
-                conn.execute("""
-                    UPDATE pvp_matches
-                    SET status = 'active'
-                    WHERE id = ?
-                    AND status = 'finishing'
-                """, (
-                    pvp_match["id"],
-                ))
+                processed = conn.execute("""
+                    SELECT 1
+                    FROM lifecycle_processed_matches
+                    WHERE match_id = ?
+                """, (ranked_id,)).fetchone()
 
-            return False
+            if not processed:
+                with db.connect() as conn:
+                    conn.execute("""
+                        UPDATE pvp_matches
+                        SET status = 'active'
+                        WHERE id = ?
+                        AND status = 'finishing'
+                    """, (pvp_match["id"],))
+                return False
+
+            result = True
 
         with db.connect() as conn:
 

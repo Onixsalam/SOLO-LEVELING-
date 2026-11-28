@@ -172,7 +172,8 @@ async def start_command(
     if not player:
         db.register_player(
             user_id=user.id,
-            username=user.username or user.first_name
+            username=user.username or "",
+            name=user.first_name or "Hunter"
         )
 
         unlock_available_skills(user.id)
@@ -229,10 +230,16 @@ async def show_profile(
         f"💎 Crystals: {crystals}\n"
     )
 
-    await update.effective_message.reply_text(
-        text,
-        reply_markup=back_keyboard()
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=back_keyboard()
+        )
+    else:
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=back_keyboard()
+        )
 
 
 # =========================================================
@@ -267,10 +274,16 @@ async def show_status(
         f"📈 Stat Points: {player['stat_points']}\n"
     )
 
-    await update.effective_message.reply_text(
-        text,
-        reply_markup=back_keyboard()
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=back_keyboard()
+        )
+    else:
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=back_keyboard()
+        )
 
 
 # =========================================================
@@ -286,10 +299,16 @@ async def show_skills(
     skills = get_player_skills(user_id)
 
     if not skills:
-        await update.effective_message.reply_text(
-            "📜 هنوز مهارتی آزاد نکرده‌ای.",
-            reply_markup=back_keyboard()
-        )
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                "📜 هنوز مهارتی آزاد نکرده‌ای.",
+                reply_markup=back_keyboard()
+            )
+        else:
+            await update.effective_message.reply_text(
+                "📜 هنوز مهارتی آزاد نکرده‌ای.",
+                reply_markup=back_keyboard()
+            )
         return
 
     text = "📜 YOUR SKILLS\n━━━━━━━━━━━━━━━━━━\n\n"
@@ -303,10 +322,16 @@ async def show_skills(
             f"⏳ Cooldown: {skill['cooldown']}s\n\n"
         )
 
-    await update.effective_message.reply_text(
-        text,
-        reply_markup=back_keyboard()
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=back_keyboard()
+        )
+    else:
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=back_keyboard()
+        )
 
 
 # =========================================================
@@ -319,9 +344,8 @@ async def menu_callback(
 ):
     query = update.callback_query
 
-    await query.answer()
-
-    if query.message.chat.type != "private":
+    if not query.message or query.message.chat.type != "private":
+        await query.answer()
         return
 
     if query.from_user.id != query.message.chat.id:
@@ -331,6 +355,7 @@ async def menu_callback(
         )
         return
 
+    await query.answer()
     action = query.data
 
     if action == "menu_home":
@@ -438,9 +463,9 @@ async def ranked_info_callback(
     context: ContextTypes.DEFAULT_TYPE
 ):
     query = update.callback_query
-    await query.answer()
 
-    if query.message.chat.type != "private":
+    if not query.message or query.message.chat.type != "private":
+        await query.answer()
         return
 
     if query.from_user.id != query.message.chat.id:
@@ -450,6 +475,7 @@ async def ranked_info_callback(
         )
         return
 
+    await query.answer()
     await query.edit_message_text(
         "🏆 RANKED MATCH\n\n"
         "برای ورود به صف مسابقه:\n"

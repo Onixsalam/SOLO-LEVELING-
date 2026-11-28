@@ -288,6 +288,16 @@ def check_gate_spawns():
                 rank
             )
 
+    # Special gates are chance-based and are checked once per scheduler run.
+    try:
+        roll = random.random()
+        if roll < RED_GATE_CHANCE:
+            create_gate(random.choice(GATE_RANKS), "red")
+        elif roll < RED_GATE_CHANCE + DOUBLE_DUNGEON_CHANCE:
+            create_gate(random.choice(GATE_RANKS), "double")
+    except Exception:
+        logger.exception("Could not spawn a special Gate")
+
 
 def close_expired_gates():
     now = int(time.time())
@@ -304,11 +314,19 @@ def close_expired_gates():
             )
         """, (now,))
 
+        # Gateهایی که کسی واردشان نشده، پس از ۳۰ دقیقه بسته می‌شوند.
+        # Gate دارای بازیکن فعال باز می‌ماند تا مبارزه تمام شود.
         conn.execute("""
             UPDATE dungeon_gates
             SET status = 'closed'
             WHERE status = 'open'
             AND expires_at <= ?
+            AND NOT EXISTS (
+                SELECT 1
+                FROM dungeon_entries e
+                WHERE e.gate_id = dungeon_gates.id
+                AND e.status = 'active'
+            )
         """, (now,))
 
 

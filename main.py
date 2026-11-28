@@ -36,6 +36,13 @@ from dungeon import setup_dungeon
 from shadows import setup_shadows
 from world_boss import setup_world_boss
 
+# Shop, Inventory and image-card commands
+from shop_cards import (
+    setup_shop_cards,
+    shop_command,
+    inventory_command,
+)
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -406,19 +413,11 @@ async def menu_callback(
         return
 
     if action == "menu_inventory":
-        await query.edit_message_text(
-            "🎒 INVENTORY\n\n"
-            "سیستم نمایش و مدیریت آیتم‌ها هنوز به منوی اصلی متصل نشده است.",
-            reply_markup=back_keyboard()
-        )
+        await inventory_command(update, context)
         return
 
     if action == "menu_shop":
-        await query.edit_message_text(
-            "🛒 SHOP\n\n"
-            "فروشگاه هنوز به منوی اصلی متصل نشده است.",
-            reply_markup=back_keyboard()
-        )
+        await shop_command(update, context)
         return
 
     if action == "menu_awakening":
@@ -486,6 +485,8 @@ async def ranked_info_callback(
         "/rankcancel",
         reply_markup=back_keyboard()
     )
+
+
 # =========================================================
 # HELP
 # =========================================================
@@ -502,7 +503,11 @@ async def help_command(
         "🔹 /daily - مأموریت‌های روزانه\n"
         "🔹 /training - تمرین\n"
         "🔹 /awakening - بیداری\n"
-        "🔹 /protection - محافظت رتبه\n\n"
+        "🔹 /protection - محافظت رتبه\n"
+        "🔹 /shop - فروشگاه\n"
+        "🔹 /inventory - کیف آیتم‌ها\n"
+        "🔹 /card profile - کارت پروفایل\n"
+        "🔹 /card status - کارت وضعیت\n\n"
         "⚔️ BATTLE\n"
         "🔹 /duel - شروع دوئل دوستانه با Reply\n"
         "🔹 /ranked - ورود به مسابقه رتبه‌ای\n"
@@ -567,6 +572,9 @@ def setup_application(application: Application):
     setup_dungeon(application)
     setup_shadows(application)
     setup_world_boss(application)
+
+    # Shop, Inventory and image cards
+    setup_shop_cards(application)
 
     # Main commands
     application.add_handler(
